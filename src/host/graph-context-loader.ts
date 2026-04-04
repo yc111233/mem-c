@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { Entity, Edge, MemoryGraphEngine } from "./graph-engine.js";
-import { searchGraph, type GraphSearchResult } from "./graph-search.js";
+import type { MemoryGraphEngine } from "./graph-engine.js";
+import { searchGraph } from "./graph-search.js";
 
 // ---------------------------------------------------------------------------
 // Context tiers
@@ -148,12 +148,10 @@ export function buildL1Context(
     const relations = hit.edges.slice(0, 5).map((edge) => {
       const isOutgoing = edge.from_id === hit.entity.id;
       const targetId = isOutgoing ? edge.to_id : edge.from_id;
-      const targetName = hit.relatedNames.find((_, i) => {
-        // Best effort name lookup from relatedNames
-        return true;
-      }) ?? targetId.slice(0, 8);
       const arrow = isOutgoing ? "->" : "<-";
-      return `${arrow} ${edge.relation} ${hit.relatedNames[0] ?? ""}`;
+      const targetEntity = engine.getEntity(targetId);
+      const targetName = targetEntity?.name ?? targetId.slice(0, 8);
+      return `${arrow} ${edge.relation} ${targetName}`;
     });
 
     const entry = {
@@ -262,8 +260,6 @@ function findEpisodesForEntity(
   // For now, use a simple approach: get recent episodes and filter
   // In the future this could use a dedicated index
   const db = engine.getDb();
-  if (!db) return [];
-
   try {
     const rows = db
       .prepare(

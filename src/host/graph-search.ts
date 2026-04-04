@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Entity, Edge, MemoryGraphEngine } from "./graph-engine.js";
-import { searchEntityFts, type EntityRow } from "./graph-schema.js";
+import { searchEntityFts } from "./graph-schema.js";
 
 // ---------------------------------------------------------------------------
 // Search options and result types
@@ -200,9 +200,7 @@ function vectorSearchEntities(
 ): VectorHit[] {
   // Try sqlite-vec virtual table first
   try {
-    const validClause = activeOnly ? `AND e.valid_until IS NULL` : "";
-    // sqlite-vec stores vectors in the embedding column as JSON arrays
-    // We compute cosine similarity manually for portability
+    // Compute cosine similarity manually for portability
     const rows = db
       .prepare(
         `SELECT id, embedding FROM entities WHERE embedding IS NOT NULL ${activeOnly ? "AND valid_until IS NULL" : ""} LIMIT ?`,
