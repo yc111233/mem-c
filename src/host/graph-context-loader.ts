@@ -264,10 +264,13 @@ function findEpisodesForEntity(
     const rows = db
       .prepare(
         `SELECT content, timestamp, session_key FROM episodes ` +
-          `WHERE extracted_entity_ids LIKE ? ` +
-          `ORDER BY timestamp DESC LIMIT ?`,
+          `WHERE id IN (` +
+            `SELECT id FROM episodes, json_each(extracted_entity_ids) ` +
+            `WHERE json_each.value = ?` +
+          `)` +
+          ` ORDER BY timestamp DESC LIMIT ?`,
       )
-      .all(`%${entityId}%`, limit) as Array<{
+      .all(entityId, limit) as Array<{
       content: string;
       timestamp: number;
       session_key: string;
@@ -321,3 +324,4 @@ export function formatL2AsDetail(l2: L2Context): string {
 
   return lines.join("\n");
 }
+
