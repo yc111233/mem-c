@@ -1,0 +1,73 @@
+{
+  "name": "openclaw-memory",
+  "version": "0.1.0",
+  "description": "Temporal knowledge graph memory system for AI agents — SQLite-based, zero-infrastructure, with hybrid retrieval (vector + FTS + graph traversal)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./engine": {
+      "types": "./dist/host/graph-engine.d.ts",
+      "default": "./dist/host/graph-engine.js"
+    },
+    "./search": {
+      "types": "./dist/host/graph-search.d.ts",
+      "default": "./dist/host/graph-search.js"
+    },
+    "./schema": {
+      "types": "./dist/host/graph-schema.d.ts",
+      "default": "./dist/host/graph-schema.js"
+    },
+    "./context": {
+      "types": "./dist/host/graph-context-loader.d.ts",
+      "default": "./dist/host/graph-context-loader.js"
+    },
+    "./tools": {
+      "types": "./dist/host/graph-tools.d.ts",
+      "default": "./dist/host/graph-tools.js"
+    },
+    "./extractor": {
+      "types": "./dist/host/graph-extractor.d.ts",
+      "default": "./dist/host/graph-extractor.js"
+    },
+    "./migrate": {
+      "types": "./dist/host/graph-migrate.d.ts",
+      "default": "./dist/host/graph-migrate.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "memory",
+    "knowledge-graph",
+    "ai-agent",
+    "sqlite",
+    "vector-search",
+    "temporal",
+    "llm",
+    "rag"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.0"
+  }
+}

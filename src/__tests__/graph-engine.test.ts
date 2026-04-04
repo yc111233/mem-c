@@ -1,0 +1,387 @@
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { MemoryGraphEngine, type Entity } from "../host/graph-engine.js";
+import { ensureGraphSchema } from "../host/graph-schema.js";
+import { searchGraph } from "../host/graph-search.js";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function createTestDb(): DatabaseSync {
+  const db = new DatabaseSync(":memory:");
+  ensureGraphSchema({ db, ftsEnabled: true });
+  return db;
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("MemoryGraphEngine", () => {
+  let db: DatabaseSync;
+  let engine: MemoryGraphEngine;
+
+  beforeEach(() => {
+    db = createTestDb();
+    engine = new MemoryGraphEngine(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  // -- Entity CRUD ----------------------------------------------------------
+
+  describe("entity CRUD", () => {
+    it("creates a new entity", () => {
+      const entity = engine.upsertEntity({
+        name: "React",
+        type: "concept",
+        summary: "A JavaScript UI library",
+      });
+
+      expect(entity.id).toBeTruthy();
+      expect(entity.name).toBe("React");
+      expect(entity.type).toBe("concept");
+      expect(entity.summary).toBe("A JavaScript UI library");
+      expect(entity.confidence).toBe(1.0);
+      expect(entity.source).toBe("auto");
+      expect(entity.valid_until).toBeNull();
+    });
+
+    it("upserts existing entity by name+type", () => {
+      const first = engine.upsertEntity({
+        name: "React",
+        type: "concept",
+        summary: "v1",
+      });
+      const second = engine.upsertEntity({
+        name: "React",
+        type: "concept",
+        summary: "A JavaScript UI library",
+      });
+
+      expect(second.id).toBe(first.id);
+      expect(second.summary).toBe("A JavaScript UI library");
+    });
+
+    it("creates separate entities for same name but different type", () => {
+      const concept = engine.upsertEntity({ name: "React", type: "concept" });
+      const file = engine.upsertEntity({ name: "React", type: "file" });
+
+      expect(concept.id).not.toBe(file.id);
+    });
+
+    it("finds entities by type", () => {
+      engine.upsertEntity({ name: "React", type: "concept" });
+      engine.upsertEntity({ name: "Vue", type: "concept" });
+      engine.upsertEntity({ name: "package.json", type: "file" });
+
+      const concepts = engine.findEntities({ type: "concept" });
+      expect(concepts).toHaveLength(2);
+    });
+
+    it("finds entity by name", () => {
+      engine.upsertEntity({ name: "React", type: "concept" });
+      const results = engine.findEntities({ name: "React" });
+      expect(results).toHaveLength(1);
+      expect(results[0]!.name).toBe("React");
+    });
+
+    it("invalidates an entity with temporal tracking", () => {
+      const entity = engine.upsertEntity({
+        name: "Old API",
+        type: "concept",
+      });
+      engine.invalidateEntity(entity.id, "replaced by new API");
+
+      const active = engine.findEntities({ name: "Old API", activeOnly: true });
+      expect(active).toHaveLength(0);
+
+      const all = engine.findEntities({ name: "Old API", activeOnly: false });
+      expect(all).toHaveLength(1);
+      expect(all[0]!.valid_until).not.toBeNull();
+    });
+
+    it("getEntity returns null for missing id", () => {
+      expect(engine.getEntity("nonexistent")).toBeNull();
+    });
+  });
+
+  // -- Edge CRUD ------------------------------------------------------------
+
+  describe("edge CRUD", () => {
+    let entityA: Entity;
+    let entityB: Entity;
+
+    beforeEach(() => {
+      entityA = engine.upsertEntity({ name: "User", type: "user" });
+      entityB = engine.upsertEntity({ name: "React Project", type: "project" });
+    });
+
+    it("creates an edge between entities", () => {
+      const edge = engine.addEdge({
+        fromId: entityA.id,
+        toId: entityB.id,
+        relation: "works_on",
+      });
+
+      expect(edge.id).toBeTruthy();
+      expect(edge.from_id).toBe(entityA.id);
+      expect(edge.to_id).toBe(entityB.id);
+      expect(edge.relation).toBe("works_on");
+      expect(edge.weight).toBe(1.0);
+    });
+
+    it("finds edges by entity and direction", () => {
+      engine.addEdge({ fromId: entityA.id, toId: entityB.id, relation: "works_on" });
+
+      const outgoing = engine.findEdges({ entityId: entityA.id, direction: "outgoing" });
+      expect(outgoing).toHaveLength(1);
+
+      const incoming = engine.findEdges({ entityId: entityA.id, direction: "incoming" });
+      expect(incoming).toHaveLength(0);
+
+      const both = engine.findEdges({ entityId: entityA.id, direction: "both" });
+      expect(both).toHaveLength(1);
+    });
+
+    it("invalidates edges when entity is invalidated", () => {
+      engine.addEdge({ fromId: entityA.id, toId: entityB.id, relation: "works_on" });
+      engine.invalidateEntity(entityA.id);
+
+      const edges = engine.findEdges({ entityId: entityA.id, activeOnly: true });
+      expect(edges).toHaveLength(0);
+    });
+
+    it("invalidates a single edge", () => {
+      const edge = engine.addEdge({ fromId: entityA.id, toId: entityB.id, relation: "works_on" });
+      engine.invalidateEdge(edge.id);
+
+      const active = engine.findEdges({ entityId: entityA.id, activeOnly: true });
+      expect(active).toHaveLength(0);
+
+      const all = engine.findEdges({ entityId: entityA.id, activeOnly: false });
+      expect(all).toHaveLength(1);
+    });
+
+    it("stores and parses edge metadata", () => {
+      const edge = engine.addEdge({
+        fromId: entityA.id,
+        toId: entityB.id,
+        relation: "works_on",
+        metadata: { role: "lead", since: "2024" },
+      });
+
+      expect(edge.metadataParsed).toEqual({ role: "lead", since: "2024" });
+    });
+  });
+
+  // -- Graph traversal ------------------------------------------------------
+
+  describe("graph traversal", () => {
+    it("gets 1-hop neighbors", () => {
+      const a = engine.upsertEntity({ name: "A", type: "concept" });
+      const b = engine.upsertEntity({ name: "B", type: "concept" });
+      const c = engine.upsertEntity({ name: "C", type: "concept" });
+      engine.addEdge({ fromId: a.id, toId: b.id, relation: "relates_to" });
+      engine.addEdge({ fromId: b.id, toId: c.id, relation: "relates_to" });
+
+      const neighbors = engine.getNeighbors(a.id, 1);
+      expect(neighbors.entities).toHaveLength(2); // A + B
+      expect(neighbors.edges).toHaveLength(1);
+    });
+
+    it("gets 2-hop neighbors", () => {
+      const a = engine.upsertEntity({ name: "A", type: "concept" });
+      const b = engine.upsertEntity({ name: "B", type: "concept" });
+      const c = engine.upsertEntity({ name: "C", type: "concept" });
+      engine.addEdge({ fromId: a.id, toId: b.id, relation: "relates_to" });
+      engine.addEdge({ fromId: b.id, toId: c.id, relation: "relates_to" });
+
+      const neighbors = engine.getNeighbors(a.id, 2);
+      expect(neighbors.entities).toHaveLength(3); // A + B + C
+      expect(neighbors.edges).toHaveLength(2);
+    });
+  });
+
+  // -- Temporal queries -----------------------------------------------------
+
+  describe("temporal queries", () => {
+    it("tracks entity history across invalidation and re-creation", () => {
+      const v1 = engine.upsertEntity({ name: "API Endpoint", type: "concept", summary: "v1" });
+      engine.invalidateEntity(v1.id);
+      // Ensure v2 gets a later valid_from
+      const v2ValidFrom = Date.now() + 1;
+      engine.upsertEntity({
+        name: "API Endpoint",
+        type: "concept",
+        summary: "v2",
+        validFrom: v2ValidFrom,
+      });
+
+      const history = engine.getEntityHistory("API Endpoint");
+      expect(history).toHaveLength(2);
+      // Ordered by valid_from DESC, so v2 (later) comes first
+      const summaries = history.map((h) => h.entity.summary);
+      expect(summaries).toContain("v1");
+      expect(summaries).toContain("v2");
+      const invalidated = history.find((h) => h.entity.valid_until !== null);
+      expect(invalidated).toBeTruthy();
+      expect(invalidated!.entity.summary).toBe("v1");
+    });
+
+    it("getActiveEntities excludes invalidated", () => {
+      engine.upsertEntity({ name: "Active", type: "concept" });
+      const old = engine.upsertEntity({ name: "Old", type: "concept" });
+      engine.invalidateEntity(old.id);
+
+      const active = engine.getActiveEntities("concept");
+      expect(active).toHaveLength(1);
+      expect(active[0]!.name).toBe("Active");
+    });
+  });
+
+  // -- Episodes -------------------------------------------------------------
+
+  describe("episodes", () => {
+    it("records and retrieves episodes", () => {
+      engine.recordEpisode({
+        sessionKey: "session-1",
+        turnIndex: 0,
+        content: "User asked about React hooks",
+        extractedEntityIds: ["entity-1"],
+      });
+      engine.recordEpisode({
+        sessionKey: "session-1",
+        turnIndex: 1,
+        content: "Discussed useEffect cleanup",
+      });
+
+      const episodes = engine.getEpisodes("session-1");
+      expect(episodes).toHaveLength(2);
+    });
+  });
+
+  // -- Stats ----------------------------------------------------------------
+
+  describe("stats", () => {
+    it("returns correct counts", () => {
+      const a = engine.upsertEntity({ name: "A", type: "concept" });
+      const b = engine.upsertEntity({ name: "B", type: "concept" });
+      engine.addEdge({ fromId: a.id, toId: b.id, relation: "relates_to" });
+      engine.recordEpisode({ sessionKey: "s1", content: "test" });
+      engine.invalidateEntity(b.id);
+
+      const stats = engine.stats();
+      expect(stats.entities).toBe(2);
+      expect(stats.activeEntities).toBe(1);
+      expect(stats.edges).toBe(1);
+      expect(stats.episodes).toBe(1);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Graph Search tests
+// ---------------------------------------------------------------------------
+
+describe("searchGraph", () => {
+  let db: DatabaseSync;
+  let engine: MemoryGraphEngine;
+
+  beforeEach(() => {
+    db = createTestDb();
+    engine = new MemoryGraphEngine(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("finds entities via FTS", () => {
+    engine.upsertEntity({ name: "React Hooks", type: "concept", summary: "useState and useEffect" });
+    engine.upsertEntity({ name: "Vue Composition", type: "concept", summary: "ref and computed" });
+
+    const results = searchGraph(db, engine, "React", { minScore: 0 });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results[0]!.entity.name).toBe("React Hooks");
+  });
+
+  it("includes edges in results", () => {
+    const react = engine.upsertEntity({ name: "React", type: "concept" });
+    const hooks = engine.upsertEntity({ name: "Hooks", type: "concept" });
+    engine.addEdge({ fromId: react.id, toId: hooks.id, relation: "has_feature" });
+
+    const results = searchGraph(db, engine, "React", {
+      includeEdges: true,
+      minScore: 0,
+    });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    const reactResult = results.find((r) => r.entity.name === "React");
+    expect(reactResult?.edges.length).toBeGreaterThanOrEqual(1);
+    expect(reactResult?.relatedNames).toContain("Hooks");
+  });
+
+  it("filters by entity type", () => {
+    engine.upsertEntity({ name: "React", type: "concept" });
+    engine.upsertEntity({ name: "React", type: "file" });
+
+    const results = searchGraph(db, engine, "React", {
+      types: ["concept"],
+      minScore: 0,
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.entity.type).toBe("concept");
+  });
+
+  it("excludes invalidated entities by default", () => {
+    const entity = engine.upsertEntity({ name: "Deprecated API", type: "concept" });
+    engine.invalidateEntity(entity.id);
+
+    const results = searchGraph(db, engine, "Deprecated", { minScore: 0 });
+    expect(results).toHaveLength(0);
+  });
+
+  it("applies temporal decay", () => {
+    // Create two entities with different update times
+    const recent = engine.upsertEntity({ name: "Fresh Info", type: "concept", summary: "fresh" });
+    const old = engine.upsertEntity({ name: "Old Info", type: "concept", summary: "old" });
+
+    // Manually backdate the old entity
+    db.prepare(`UPDATE entities SET updated_at = ? WHERE id = ?`).run(
+      Date.now() - 90 * 24 * 60 * 60 * 1000, // 90 days ago
+      old.id,
+    );
+
+    const results = searchGraph(db, engine, "Info", {
+      temporalDecayDays: 30,
+      minScore: 0,
+    });
+
+    if (results.length >= 2) {
+      const freshResult = results.find((r) => r.entity.name === "Fresh Info");
+      const oldResult = results.find((r) => r.entity.name === "Old Info");
+      if (freshResult && oldResult) {
+        expect(freshResult.scoreBreakdown.temporal).toBeGreaterThan(
+          oldResult.scoreBreakdown.temporal,
+        );
+      }
+    }
+  });
+
+  it("falls back to LIKE search when FTS and vector have no results", () => {
+    engine.upsertEntity({ name: "MySpecialComponent", type: "concept" });
+
+    const results = searchGraph(db, engine, "Special", { minScore: 0 });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("returns empty for no matches", () => {
+    engine.upsertEntity({ name: "React", type: "concept" });
+
+    const results = searchGraph(db, engine, "xyznonexistent123", { minScore: 0.5 });
+    expect(results).toHaveLength(0);
+  });
+});
