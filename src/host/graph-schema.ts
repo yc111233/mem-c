@@ -82,7 +82,7 @@ export function ensureGraphSchema(params: {
       name TEXT NOT NULL,
       type TEXT NOT NULL,
       summary TEXT,
-      embedding TEXT,
+      embedding BLOB,
       confidence REAL NOT NULL DEFAULT 1.0,
       source TEXT NOT NULL DEFAULT 'auto',
       valid_from INTEGER NOT NULL,

@@ -5,7 +5,7 @@
  * All mutations run inside a single transaction.
  */
 
-import type { MemoryGraphEngine, Entity } from "./graph-engine.js";
+import { normalizeEntityName, type MemoryGraphEngine, type Entity } from "./graph-engine.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,13 +50,14 @@ export function consolidateGraph(
     // Phase 1: Scan
     const entities = engine.getActiveEntities();
 
-    // Phase 2: Merge — same-name entities with different types
+    // Phase 2: Merge — same-name entities (normalized) with different types
     if (enableMerge) {
       const byName = new Map<string, Entity[]>();
       for (const e of entities) {
-        const group = byName.get(e.name) ?? [];
+        const key = normalizeEntityName(e.name);
+        const group = byName.get(key) ?? [];
         group.push(e);
-        byName.set(e.name, group);
+        byName.set(key, group);
       }
 
       for (const [, group] of byName) {

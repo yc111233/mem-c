@@ -82,14 +82,19 @@ export function searchGraph(
   // Path 1: FTS search
   try {
     const ftsResults = searchEntityFts(db, query, { limit: candidateLimit });
-    for (const hit of ftsResults) {
-      // FTS5 rank is negative; normalize to 0-1 range
-      const normalizedScore = Math.min(1, Math.max(0, -hit.rank / 10));
-      const existing = candidateScores.get(hit.id);
-      if (existing) {
-        existing.fts = normalizedScore;
-      } else {
-        candidateScores.set(hit.id, { vector: 0, fts: normalizedScore });
+    if (ftsResults.length > 0) {
+      // FTS5 rank is negative; normalize relative to best hit (best = 1.0)
+      const bestRank = -ftsResults[0]!.rank; // most negative = best match
+      for (const hit of ftsResults) {
+        const normalizedScore = bestRank > 0
+          ? Math.min(1, (-hit.rank) / bestRank)
+          : 0.5; // fallback if all ranks are 0
+        const existing = candidateScores.get(hit.id);
+        if (existing) {
+          existing.fts = normalizedScore;
+        } else {
+          candidateScores.set(hit.id, { vector: 0, fts: normalizedScore });
+        }
       }
     }
   } catch {
@@ -111,18 +116,20 @@ export function searchGraph(
 
   // If no candidates found, do a fallback LIKE search (name > summary)
   if (candidateScores.size === 0) {
-    const likePattern = `%${query}%`;
+    // Escape LIKE wildcards in the query
+    const escaped = query.replace(/[%_\\]/g, (ch) => `\\${ch}`);
+    const likePattern = `%${escaped}%`;
     const validClause = activeOnly ? `AND valid_until IS NULL` : "";
 
     const nameHits = db
-      .prepare(`SELECT id FROM entities WHERE name LIKE ? ${validClause} LIMIT ?`)
+      .prepare(`SELECT id FROM entities WHERE name LIKE ? ESCAPE '\\' ${validClause} LIMIT ?`)
       .all(likePattern, candidateLimit) as Array<{ id: string }>;
     for (const row of nameHits) {
       candidateScores.set(row.id, { vector: 0, fts: 0.5 });
     }
 
     const summaryHits = db
-      .prepare(`SELECT id FROM entities WHERE summary LIKE ? ${validClause} LIMIT ?`)
+      .prepare(`SELECT id FROM entities WHERE summary LIKE ? ESCAPE '\\' ${validClause} LIMIT ?`)
       .all(likePattern, candidateLimit) as Array<{ id: string }>;
     for (const row of summaryHits) {
       if (!candidateScores.has(row.id)) {

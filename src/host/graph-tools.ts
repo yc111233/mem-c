@@ -52,6 +52,7 @@ export function memoryGraphSearch(
     maxResults: input.maxResults ?? 6,
     compact: input.compact,
     queryEmbedding,
+    types: input.types,
   });
 
   const results = l1.results.map((r) => ({

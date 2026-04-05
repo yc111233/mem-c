@@ -245,6 +245,7 @@ export function buildL1Context(
     /** Compact mode: omit relations to save tokens under tight budgets. */
     compact?: boolean;
     queryEmbedding?: number[];
+    types?: string[];
   },
 ): L1Context {
   const maxResults = opts?.maxResults ?? 6;
@@ -255,6 +256,7 @@ export function buildL1Context(
     maxResults: maxResults * 2, // over-fetch for token budget trimming
     includeEdges: !compact,
     queryEmbedding: opts?.queryEmbedding,
+    types: opts?.types,
   });
 
   const results: L1Context["results"] = [];

@@ -116,9 +116,6 @@ export type EntityVersion = {
 export class MemoryGraphEngine {
   private readonly embedFn?: EmbedFn;
 
-  constructor(db: DatabaseSync, opts?: { embedFn?: EmbedFn });
-  /** @deprecated Use the options form: `new MemoryGraphEngine(db, { embedFn })` */
-  constructor(db: DatabaseSync);
   constructor(private readonly db: DatabaseSync, opts?: { embedFn?: EmbedFn }) {
     this.embedFn = opts?.embedFn;
   }
@@ -177,21 +174,16 @@ export class MemoryGraphEngine {
         )
         .get(input.name, input.type) as EntityRow | undefined;
 
-      // Fallback: try normalized alias lookup
+      // Fallback: try normalized alias lookup (join with entities to filter by type)
       if (!existing) {
         const normalized = normalizeEntityName(input.name);
-        const aliasRow = this.db
+        existing = this.db
           .prepare(
-            `SELECT entity_id FROM entity_aliases WHERE alias = ? LIMIT 1`,
+            `SELECT e.* FROM entity_aliases a ` +
+              `JOIN entities e ON e.id = a.entity_id ` +
+              `WHERE a.alias = ? AND e.type = ? AND e.valid_until IS NULL LIMIT 1`,
           )
-          .get(normalized) as { entity_id: string } | undefined;
-        if (aliasRow) {
-          existing = this.db
-            .prepare(
-              `SELECT * FROM entities WHERE id = ? AND type = ? AND valid_until IS NULL LIMIT 1`,
-            )
-            .get(aliasRow.entity_id, input.type) as EntityRow | undefined;
-        }
+          .get(normalized, input.type) as EntityRow | undefined;
       }
 
       if (existing) {

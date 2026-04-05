@@ -138,9 +138,15 @@ export default {
     const db = new DatabaseSync(cfg.dbPath);
     const { entityFtsAvailable } = ensureGraphSchema({ db });
 
-    // Wire up embedFn from host if available
-    const embedFn = api.getEmbedFn?.();
-    const engine = new MemoryGraphEngine(db, embedFn ? { embedFn } : undefined);
+    // Lazy embedFn: delegates to host on each call so late registration works
+    const lazyEmbedFn: EmbedFn | undefined = api.getEmbedFn
+      ? (text: string) => {
+          const fn = api.getEmbedFn!();
+          if (!fn) throw new Error("embedFn not available from host");
+          return fn(text);
+        }
+      : undefined;
+    const engine = new MemoryGraphEngine(db, lazyEmbedFn ? { embedFn: lazyEmbedFn } : undefined);
 
     if (!entityFtsAvailable) {
       api.logger.warn("memory-graph: FTS5 unavailable, falling back to LIKE search");
