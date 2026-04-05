@@ -27,7 +27,7 @@ export type EntityRow = {
   name: string;
   type: EntityType;
   summary: string | null;
-  embedding: string | null;
+  embedding: string | Buffer | null;
   confidence: number;
   source: EntitySource;
   valid_from: number;
@@ -119,6 +119,7 @@ export function ensureGraphSchema(params: {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_id);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_id);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_edges_dedup ON edges(from_id, to_id, relation);`);
 
   // -- episodes ---------------------------------------------------------------
   db.exec(`
@@ -133,6 +134,17 @@ export function ensureGraphSchema(params: {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_episodes_session ON episodes(session_key);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_episodes_ts ON episodes(timestamp);`);
+
+  // -- entity_aliases ----------------------------------------------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS entity_aliases (
+      alias TEXT NOT NULL,
+      entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (alias, entity_id)
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_aliases_entity ON entity_aliases(entity_id);`);
 
   // -- meta (for invalidation audit) ------------------------------------------
   db.exec(`
@@ -159,6 +171,32 @@ export function ensureGraphSchema(params: {
     }
   }
 
+  // -- Embedding TEXT → BLOB migration -----------------------------------------
+  try {
+    const textRow = db
+      .prepare(
+        `SELECT id FROM entities WHERE embedding IS NOT NULL AND typeof(embedding) = 'text' LIMIT 1`,
+      )
+      .get() as { id: string } | undefined;
+    if (textRow) {
+      const rows = db
+        .prepare(`SELECT id, embedding FROM entities WHERE embedding IS NOT NULL AND typeof(embedding) = 'text'`)
+        .all() as Array<{ id: string; embedding: string }>;
+      const update = db.prepare(`UPDATE entities SET embedding = ? WHERE id = ?`);
+      for (const row of rows) {
+        try {
+          const vec = JSON.parse(row.embedding) as number[];
+          const blob = Buffer.from(new Float32Array(vec).buffer);
+          update.run(blob, row.id);
+        } catch {
+          // Skip corrupted embeddings
+        }
+      }
+    }
+  } catch {
+    // Migration is best-effort
+  }
+
   return { entityFtsAvailable, ...(entityFtsError ? { entityFtsError } : {}) };
 }
 
@@ -179,17 +217,32 @@ export function removeEntityFts(db: DatabaseSync, entityId: string): void {
   db.prepare(`DELETE FROM ${ENTITY_FTS_TABLE} WHERE id = ?`).run(entityId);
 }
 
+/**
+ * Sanitize a user query for FTS5 MATCH.
+ * Strips FTS5 operators and wraps remaining terms in double quotes.
+ */
+export function sanitizeFtsQuery(query: string): string {
+  // Remove FTS5 special operators
+  const stripped = query.replace(/["\*\(\)\{\}\^~:]/g, " ");
+  // Split into words, filter empties, wrap each in quotes
+  const terms = stripped.split(/\s+/).filter((t) => t.length > 0);
+  if (terms.length === 0) return "";
+  return terms.map((t) => `"${t}"`).join(" ");
+}
+
 /** Full-text search over entity names and summaries. */
 export function searchEntityFts(
   db: DatabaseSync,
   query: string,
   opts?: { limit?: number },
 ): Array<{ id: string; rank: number }> {
+  const sanitized = sanitizeFtsQuery(query);
+  if (!sanitized) return [];
   const limit = opts?.limit ?? 20;
   const rows = db
     .prepare(
       `SELECT id, rank FROM ${ENTITY_FTS_TABLE} WHERE ${ENTITY_FTS_TABLE} MATCH ? ORDER BY rank LIMIT ?`,
     )
-    .all(query, limit) as Array<{ id: string; rank: number }>;
+    .all(sanitized, limit) as Array<{ id: string; rank: number }>;
   return rows;
 }

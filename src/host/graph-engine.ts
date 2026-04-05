@@ -11,6 +11,33 @@ import {
 } from "./graph-schema.js";
 
 // ---------------------------------------------------------------------------
+// Embedding serialization (Float32Array ↔ Buffer)
+// ---------------------------------------------------------------------------
+
+export function serializeEmbedding(vec: number[]): Buffer {
+  return Buffer.from(new Float32Array(vec).buffer);
+}
+
+export function deserializeEmbedding(blob: Buffer): number[] {
+  const f32 = new Float32Array(new Uint8Array(blob).buffer);
+  return Array.from(f32);
+}
+
+// ---------------------------------------------------------------------------
+// Entity name normalization
+// ---------------------------------------------------------------------------
+
+export function normalizeEntityName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// ---------------------------------------------------------------------------
+// Embed function type
+// ---------------------------------------------------------------------------
+
+export type EmbedFn = (text: string) => number[];
+
+// ---------------------------------------------------------------------------
 // Input types
 // ---------------------------------------------------------------------------
 
@@ -87,11 +114,23 @@ export type EntityVersion = {
 // ---------------------------------------------------------------------------
 
 export class MemoryGraphEngine {
-  constructor(private readonly db: DatabaseSync) {}
+  private readonly embedFn?: EmbedFn;
+
+  constructor(db: DatabaseSync, opts?: { embedFn?: EmbedFn });
+  /** @deprecated Use the options form: `new MemoryGraphEngine(db, { embedFn })` */
+  constructor(db: DatabaseSync);
+  constructor(private readonly db: DatabaseSync, opts?: { embedFn?: EmbedFn }) {
+    this.embedFn = opts?.embedFn;
+  }
 
   /** Expose the underlying database for advanced queries (e.g. episode lookups). */
   getDb(): DatabaseSync {
     return this.db;
+  }
+
+  /** Get the configured embedding function, if any. */
+  getEmbedFn(): EmbedFn | undefined {
+    return this.embedFn;
   }
 
   // NOTE: This flag assumes single-threaded access (node:sqlite's DatabaseSync is synchronous).
@@ -122,14 +161,38 @@ export class MemoryGraphEngine {
   upsertEntity(input: EntityInput): Entity & { isNew: boolean } {
     return this.runInTransaction(() => {
       const now = Date.now();
-      const embeddingJson = input.embedding ? JSON.stringify(input.embedding) : null;
+
+      // Auto-generate embedding via hook if not provided
+      let embedding = input.embedding;
+      if (!embedding && this.embedFn) {
+        const text = input.name + (input.summary ? " " + input.summary : "");
+        embedding = this.embedFn(text);
+      }
+      const embeddingBlob = embedding ? serializeEmbedding(embedding) : null;
 
       // Try to find existing active entity with same name+type
-      const existing = this.db
+      let existing = this.db
         .prepare(
           `SELECT * FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL LIMIT 1`,
         )
         .get(input.name, input.type) as EntityRow | undefined;
+
+      // Fallback: try normalized alias lookup
+      if (!existing) {
+        const normalized = normalizeEntityName(input.name);
+        const aliasRow = this.db
+          .prepare(
+            `SELECT entity_id FROM entity_aliases WHERE alias = ? LIMIT 1`,
+          )
+          .get(normalized) as { entity_id: string } | undefined;
+        if (aliasRow) {
+          existing = this.db
+            .prepare(
+              `SELECT * FROM entities WHERE id = ? AND type = ? AND valid_until IS NULL LIMIT 1`,
+            )
+            .get(aliasRow.entity_id, input.type) as EntityRow | undefined;
+        }
+      }
 
       if (existing) {
         // Update existing entity
@@ -140,12 +203,15 @@ export class MemoryGraphEngine {
           )
           .run(
             input.summary ?? null,
-            embeddingJson,
+            embeddingBlob,
             input.confidence ?? existing.confidence,
             input.source ?? existing.source,
             now,
             existing.id,
           );
+
+        // Ensure alias exists for the input name variant
+        this._ensureAlias(existing.id, input.name, now);
 
         const updated = this.db
           .prepare(`SELECT * FROM entities WHERE id = ?`)
@@ -167,13 +233,16 @@ export class MemoryGraphEngine {
           input.name,
           input.type,
           input.summary ?? null,
-          embeddingJson,
+          embeddingBlob,
           input.confidence ?? 1.0,
           input.source ?? "auto",
           input.validFrom ?? now,
           now,
           now,
         );
+
+      // Register normalized alias
+      this._ensureAlias(id, input.name, now);
 
       const row = this.db.prepare(`SELECT * FROM entities WHERE id = ?`).get(id) as EntityRow;
       syncEntityFts(this.db, row);
@@ -211,7 +280,53 @@ export class MemoryGraphEngine {
       .prepare(`SELECT * FROM entities ${where} ORDER BY updated_at DESC LIMIT ?`)
       .all(...params, limit) as EntityRow[];
 
+    // If searching by name and no results, try alias lookup
+    if (rows.length === 0 && query.name) {
+      const normalized = normalizeEntityName(query.name);
+      const aliasRows = this.db
+        .prepare(`SELECT entity_id FROM entity_aliases WHERE alias = ?`)
+        .all(normalized) as Array<{ entity_id: string }>;
+      if (aliasRows.length > 0) {
+        const ids = aliasRows.map((r) => r.entity_id);
+        const placeholders = ids.map(() => "?").join(",");
+        const aliasConds: string[] = [`id IN (${placeholders})`];
+        const aliasParams: (string | number | null)[] = [...ids];
+        if (query.type) {
+          aliasConds.push(`type = ?`);
+          aliasParams.push(query.type);
+        }
+        if (activeOnly) {
+          aliasConds.push(`valid_until IS NULL`);
+        }
+        const aliasWhere = `WHERE ${aliasConds.join(" AND ")}`;
+        const aliasEntities = this.db
+          .prepare(`SELECT * FROM entities ${aliasWhere} ORDER BY updated_at DESC LIMIT ?`)
+          .all(...aliasParams, limit) as EntityRow[];
+        return aliasEntities.map(toEntity);
+      }
+    }
+
     return rows.map(toEntity);
+  }
+
+  /** Register a normalized alias for an entity (internal helper). */
+  private _ensureAlias(entityId: string, name: string, now: number): void {
+    const normalized = normalizeEntityName(name);
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO entity_aliases (alias, entity_id, created_at) VALUES (?, ?, ?)`,
+      )
+      .run(normalized, entityId, now);
+  }
+
+  /** Add a custom alias for an entity. */
+  addAlias(entityId: string, alias: string): void {
+    const normalized = normalizeEntityName(alias);
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO entity_aliases (alias, entity_id, created_at) VALUES (?, ?, ?)`,
+      )
+      .run(normalized, entityId, Date.now());
   }
 
   /** Mark an entity as no longer valid (soft delete with temporal tracking). */
@@ -329,9 +444,27 @@ export class MemoryGraphEngine {
 
   addEdge(input: EdgeInput): Edge {
     const now = Date.now();
-    const id = randomUUID();
     const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
+    const newWeight = input.weight ?? 1.0;
 
+    // Dedup: check for existing active edge with same (from, to, relation)
+    const existing = this.db
+      .prepare(
+        `SELECT * FROM edges WHERE from_id = ? AND to_id = ? AND relation = ? AND valid_until IS NULL LIMIT 1`,
+      )
+      .get(input.fromId, input.toId, input.relation) as EdgeRow | undefined;
+
+    if (existing) {
+      // Update weight (keep the higher value) and metadata
+      const updatedWeight = Math.max(existing.weight, newWeight);
+      this.db
+        .prepare(`UPDATE edges SET weight = ?, metadata = COALESCE(?, metadata) WHERE id = ?`)
+        .run(updatedWeight, metadataJson, existing.id);
+      const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(existing.id) as EdgeRow;
+      return toEdge(row);
+    }
+
+    const id = randomUUID();
     this.db
       .prepare(
         `INSERT INTO edges (id, from_id, to_id, relation, weight, metadata, valid_from, valid_until, created_at) ` +
@@ -342,7 +475,7 @@ export class MemoryGraphEngine {
         input.fromId,
         input.toId,
         input.relation,
-        input.weight ?? 1.0,
+        newWeight,
         metadataJson,
         input.validFrom ?? now,
         now,
@@ -542,7 +675,13 @@ function toEntity(row: EntityRow): Entity {
   let embeddingVector: number[] | undefined;
   if (row.embedding) {
     try {
-      embeddingVector = JSON.parse(row.embedding) as number[];
+      if (typeof row.embedding === "string") {
+        // Legacy JSON TEXT format (pre-migration)
+        embeddingVector = JSON.parse(row.embedding) as number[];
+      } else {
+        // BLOB storage (new format) — Buffer at runtime
+        embeddingVector = deserializeEmbedding(row.embedding);
+      }
     } catch {
       // Corrupted embedding — skip
     }

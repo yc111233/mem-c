@@ -14,6 +14,11 @@ Temporal knowledge graph memory system for AI agents — SQLite-based, zero-infr
 - **Compaction-aware** — pre-compaction extraction hooks and post-compaction L0 boost to prevent knowledge loss
 - **LLM extraction** — automatic entity/relation extraction from conversation transcripts
 - **Markdown migration** — import existing MEMORY.md / memory/*.md files into the graph
+- **Edge deduplication** — automatic merge of duplicate edges with weight updates (v0.3+)
+- **Binary embedding storage** — BLOB storage for 60% space reduction vs JSON (v0.3+)
+- **FTS query safety** — sanitized queries prevent crashes on special characters (v0.3+)
+- **Embedding hook** — optional `embedFn` for auto-generating embeddings (v0.3+)
+- **Entity aliases** — case-insensitive name matching with custom alias support (v0.3+)
 - **Zero infrastructure** — pure `node:sqlite` (Node 22+), no external databases
 
 ## Install
@@ -51,7 +56,7 @@ const engine = new MemoryGraphEngine(db);
 const user = engine.upsertEntity({ name: "Alice", type: "user", summary: "Lead engineer" });
 const project = engine.upsertEntity({ name: "GraphDB", type: "project", summary: "Graph database project" });
 
-// Create relationships
+// Create relationships (auto-deduplicates)
 engine.addEdge({ fromId: user.id, toId: project.id, relation: "works_on" });
 
 // Search
@@ -61,6 +66,45 @@ console.log(results[0]?.entity.name, results[0]?.score);
 // Temporal: invalidate outdated facts
 engine.invalidateEntity(project.id, "project completed");
 const history = engine.getEntityHistory("GraphDB"); // see all versions
+```
+
+### With Embedding Hook (v0.3+)
+
+```typescript
+import { MemoryGraphEngine } from "openclaw-memory";
+
+// Provide embedding function
+const engine = new MemoryGraphEngine(db, {
+  embedFn: (text: string) => {
+    // Your embedding model here (e.g., OpenAI, local model)
+    return generateEmbedding(text);
+  }
+});
+
+// Embeddings auto-generated on upsert
+engine.upsertEntity({ name: "React", type: "concept", summary: "UI library" });
+// Embedding automatically created from "React UI library"
+
+// Query embeddings auto-generated in search
+const results = searchGraph(db, engine, "JavaScript frameworks");
+// Query embedding automatically generated, no need to pass queryEmbedding
+```
+
+### Entity Aliases (v0.3+)
+
+```typescript
+// Case-insensitive matching
+engine.upsertEntity({ name: "React", type: "concept" });
+engine.upsertEntity({ name: "react", type: "concept" }); // Merges into same entity
+
+// Custom aliases
+const entity = engine.upsertEntity({ name: "React", type: "concept" });
+engine.addAlias(entity.id, "ReactJS");
+engine.addAlias(entity.id, "React.js");
+
+// Find by any alias
+const results = engine.findEntities({ name: "reactjs", type: "concept" });
+// Returns the "React" entity
 ```
 
 ## Context Tiers

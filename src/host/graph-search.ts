@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { Entity, Edge, MemoryGraphEngine } from "./graph-engine.js";
+import { deserializeEmbedding, type Entity, type Edge, type MemoryGraphEngine } from "./graph-engine.js";
 import { searchEntityFts } from "./graph-schema.js";
 
 // ---------------------------------------------------------------------------
@@ -66,7 +66,14 @@ export function searchGraph(
   const ftsWeight = opts?.ftsWeight ?? 0.3;
   const graphWeight = opts?.graphWeight ?? 0.2;
   const temporalDecayDays = opts?.temporalDecayDays ?? 30;
-  const queryEmbedding = opts?.queryEmbedding;
+  // Auto-generate query embedding via engine's embedFn if not provided
+  let queryEmbedding = opts?.queryEmbedding;
+  if (!queryEmbedding && query.trim()) {
+    const embedFn = engine.getEmbedFn();
+    if (embedFn) {
+      queryEmbedding = embedFn(query);
+    }
+  }
 
   // Candidate pool — gather from multiple retrieval paths
   const candidateScores = new Map<string, { vector: number; fts: number }>();
@@ -218,12 +225,18 @@ function vectorSearchEntities(
           `${activeOnly ? "AND valid_until IS NULL " : ""}` +
           `ORDER BY updated_at DESC LIMIT ?`,
       )
-      .all(scanLimit) as Array<{ id: string; embedding: string }>;
+      .all(scanLimit) as Array<{ id: string; embedding: string | Buffer }>;
 
     const hits: VectorHit[] = [];
     for (const row of rows) {
       try {
-        const stored = JSON.parse(row.embedding) as number[];
+        let stored: number[];
+        if (typeof row.embedding === "string") {
+          stored = JSON.parse(row.embedding) as number[];
+        } else {
+          // BLOB storage — Buffer at runtime
+          stored = deserializeEmbedding(row.embedding as Buffer);
+        }
         const sim = cosineSimilarity(queryEmbedding, stored);
         if (sim > 0) {
           hits.push({ id: row.id, similarity: sim });

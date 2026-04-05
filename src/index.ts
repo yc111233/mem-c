@@ -6,6 +6,7 @@ export {
   syncEntityFts,
   removeEntityFts,
   searchEntityFts,
+  sanitizeFtsQuery,
   type EntityType,
   type EntitySource,
   type EntityRow,
@@ -17,6 +18,10 @@ export {
 export {
   MemoryGraphEngine,
   computeImportance,
+  serializeEmbedding,
+  deserializeEmbedding,
+  normalizeEntityName,
+  type EmbedFn,
   type EntityInput,
   type EdgeInput,
   type EpisodeInput,
