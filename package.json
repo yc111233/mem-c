@@ -1,6 +1,6 @@
 {
   "name": "openclaw-memory",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Temporal knowledge graph memory system for AI agents — SQLite-based, zero-infrastructure, with hybrid retrieval (vector + FTS + graph traversal)",
   "type": "module",
   "main": "dist/index.js",
@@ -62,7 +62,16 @@
     "llm",
     "rag"
   ],
+  "author": "OpenClaw Contributors",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yc111233/openclaw-memory.git"
+  },
+  "homepage": "https://github.com/yc111233/openclaw-memory#readme",
+  "bugs": {
+    "url": "https://github.com/yc111233/openclaw-memory/issues"
+  },
   "engines": {
     "node": ">=22.0.0"
   },

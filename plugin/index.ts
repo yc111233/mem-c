@@ -29,6 +29,7 @@ import {
   suggestBudgets,
   extractAndMerge,
   type LlmExtractFn,
+  type EmbedFn,
 } from "openclaw-memory";
 import { memoryGraphConfigSchema } from "./config.js";
 
@@ -61,6 +62,8 @@ type OpenClawPluginApi = {
   ) => void;
   registerService: (service: { id: string; start: () => Promise<void>; stop: () => void }) => void;
   on: (event: string, handler: (event?: unknown) => Promise<unknown>) => void;
+  /** Optional: host-provided embedding function for auto-generating embeddings. */
+  getEmbedFn?: () => EmbedFn | undefined;
 };
 
 // ---------------------------------------------------------------------------
@@ -134,7 +137,10 @@ export default {
     mkdirSync(dirname(cfg.dbPath), { recursive: true });
     const db = new DatabaseSync(cfg.dbPath);
     const { entityFtsAvailable } = ensureGraphSchema({ db });
-    const engine = new MemoryGraphEngine(db);
+
+    // Wire up embedFn from host if available
+    const embedFn = api.getEmbedFn?.();
+    const engine = new MemoryGraphEngine(db, embedFn ? { embedFn } : undefined);
 
     if (!entityFtsAvailable) {
       api.logger.warn("memory-graph: FTS5 unavailable, falling back to LIKE search");

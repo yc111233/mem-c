@@ -13,6 +13,11 @@
 - **图谱整合** — 自动合并重复实体、衰减过时实体、清理低置信孤立实体
 - **压缩感知** — 压缩前提取钩子 + 压缩后 L0 增强，防止知识丢失
 - **LLM 自动抽取** — 从对话文本中自动提取实体和关系
+- **边去重** — 自动合并重复边并更新权重（v0.3+）
+- **二进制嵌入存储** — BLOB 存储，相比 JSON 节省约 60% 空间（v0.3+）
+- **FTS 查询安全** — 自动清理特殊字符，防止 FTS5 查询崩溃（v0.3+）
+- **嵌入函数钩子** — 可选 `embedFn` 自动生成嵌入向量（v0.3+）
+- **实体别名** — 大小写不敏感匹配 + 自定义别名支持（v0.3+）
 - **零基础设施** — 纯 `node:sqlite`（Node 22+），无需外部数据库
 
 ## 架构
@@ -44,7 +49,7 @@ const engine = new MemoryGraphEngine(db);
 const user = engine.upsertEntity({ name: "Alice", type: "user", summary: "首席工程师" });
 const project = engine.upsertEntity({ name: "GraphDB", type: "project", summary: "图数据库项目" });
 
-// 创建关系
+// 创建关系（自动去重）
 engine.addEdge({ fromId: user.id, toId: project.id, relation: "works_on" });
 
 // 搜索
@@ -54,6 +59,45 @@ console.log(results[0]?.entity.name, results[0]?.score);
 // 时序：使过时事实失效
 engine.invalidateEntity(project.id, "project completed");
 const history = engine.getEntityHistory("GraphDB"); // 查看所有版本
+```
+
+### 嵌入函数钩子 (v0.3+)
+
+```typescript
+import { MemoryGraphEngine } from "openclaw-memory";
+
+// 提供嵌入函数
+const engine = new MemoryGraphEngine(db, {
+  embedFn: (text: string) => {
+    // 使用你的嵌入模型（如 OpenAI、本地模型等）
+    return generateEmbedding(text);
+  }
+});
+
+// 存储实体时自动生成嵌入向量
+engine.upsertEntity({ name: "React", type: "concept", summary: "UI 库" });
+// 嵌入向量从 "React UI 库" 自动生成
+
+// 搜索时自动生成查询嵌入向量
+const results = searchGraph(db, engine, "JavaScript 框架");
+// 无需手动传入 queryEmbedding
+```
+
+### 实体别名 (v0.3+)
+
+```typescript
+// 大小写不敏感匹配
+engine.upsertEntity({ name: "React", type: "concept" });
+engine.upsertEntity({ name: "react", type: "concept" }); // 合并到同一实体
+
+// 自定义别名
+const entity = engine.upsertEntity({ name: "React", type: "concept" });
+engine.addAlias(entity.id, "ReactJS");
+engine.addAlias(entity.id, "React.js");
+
+// 通过任意别名查找
+const results = engine.findEntities({ name: "reactjs", type: "concept" });
+// 返回 "React" 实体
 ```
 
 ## 上下文层级
@@ -97,7 +141,7 @@ const result = await extractAndMerge({
 
 ## 智能体工具
 
-五个预构建的工具函数，用于智能体集成：
+六个预构建的工具函数，用于智能体集成：
 
 | 工具 | 功能 | 用途 |
 |------|------|------|
