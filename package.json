@@ -48,6 +48,7 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
@@ -67,6 +68,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.5.2",
+    "@vitest/coverage-v8": "^4.1.0",
     "typescript": "^5.7.0",
     "vitest": "^4.1.0"
   }

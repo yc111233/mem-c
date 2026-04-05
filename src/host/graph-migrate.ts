@@ -148,14 +148,7 @@ export async function migrateMarkdownMemory(params: {
         }
       }
 
-      const existing = engine.findEntities({
-        name,
-        type: entityType,
-        activeOnly: true,
-        limit: 1,
-      });
-
-      engine.upsertEntity({
+      const entity = engine.upsertEntity({
         name,
         type: entityType,
         summary,
@@ -164,10 +157,10 @@ export async function migrateMarkdownMemory(params: {
       });
 
       result.filesProcessed++;
-      if (existing.length > 0) {
-        result.entitiesUpdated++;
-      } else {
+      if (entity.isNew) {
         result.entitiesCreated++;
+      } else {
+        result.entitiesUpdated++;
       }
     } catch (err) {
       result.errors.push(

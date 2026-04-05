@@ -1,0 +1,49 @@
+{
+  "id": "memory-graph",
+  "kind": "memory",
+  "uiHints": {
+    "dbPath": {
+      "label": "Database Path",
+      "placeholder": "~/.openclaw/memory/graph.db",
+      "help": "Path to the SQLite database file for the knowledge graph"
+    },
+    "autoExtract": {
+      "label": "Auto-Extract",
+      "help": "Automatically extract entities and relations from conversations using LLM"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Inject known entities into agent context before each request"
+    },
+    "recallMaxTokens": {
+      "label": "Recall Max Tokens",
+      "placeholder": "200",
+      "advanced": true,
+      "help": "Maximum tokens for L0 entity roster injection"
+    },
+    "recallMaxEntities": {
+      "label": "Recall Max Entities",
+      "placeholder": "50",
+      "advanced": true,
+      "help": "Maximum entities to include in L0 roster"
+    },
+    "searchMaxResults": {
+      "label": "Search Max Results",
+      "placeholder": "6",
+      "advanced": true,
+      "help": "Default max results for memory_graph_search tool"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "dbPath": { "type": "string" },
+      "autoExtract": { "type": "boolean" },
+      "autoRecall": { "type": "boolean" },
+      "recallMaxTokens": { "type": "number" },
+      "recallMaxEntities": { "type": "number" },
+      "searchMaxResults": { "type": "number" }
+    }
+  }
+}

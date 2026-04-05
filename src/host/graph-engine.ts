@@ -94,66 +94,91 @@ export class MemoryGraphEngine {
     return this.db;
   }
 
+  // NOTE: This flag assumes single-threaded access (node:sqlite's DatabaseSync is synchronous).
+  // If the engine is ever shared across concurrent async contexts, this needs a proper mutex.
+  private inTransaction = false;
+
+  /** Run a function inside a SQLite transaction. Supports nesting (inner calls are no-ops). */
+  runInTransaction<T>(fn: () => T): T {
+    if (this.inTransaction) {
+      return fn();
+    }
+    this.inTransaction = true;
+    this.db.exec("BEGIN");
+    try {
+      const result = fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    } finally {
+      this.inTransaction = false;
+    }
+  }
+
   // -- Entity CRUD ----------------------------------------------------------
 
-  upsertEntity(input: EntityInput): Entity {
-    const now = Date.now();
-    const embeddingJson = input.embedding ? JSON.stringify(input.embedding) : null;
+  upsertEntity(input: EntityInput): Entity & { isNew: boolean } {
+    return this.runInTransaction(() => {
+      const now = Date.now();
+      const embeddingJson = input.embedding ? JSON.stringify(input.embedding) : null;
 
-    // Try to find existing active entity with same name+type
-    const existing = this.db
-      .prepare(
-        `SELECT * FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL LIMIT 1`,
-      )
-      .get(input.name, input.type) as EntityRow | undefined;
+      // Try to find existing active entity with same name+type
+      const existing = this.db
+        .prepare(
+          `SELECT * FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL LIMIT 1`,
+        )
+        .get(input.name, input.type) as EntityRow | undefined;
 
-    if (existing) {
-      // Update existing entity
+      if (existing) {
+        // Update existing entity
+        this.db
+          .prepare(
+            `UPDATE entities SET summary = COALESCE(?, summary), embedding = COALESCE(?, embedding), ` +
+              `confidence = ?, source = ?, updated_at = ? WHERE id = ?`,
+          )
+          .run(
+            input.summary ?? null,
+            embeddingJson,
+            input.confidence ?? existing.confidence,
+            input.source ?? existing.source,
+            now,
+            existing.id,
+          );
+
+        const updated = this.db
+          .prepare(`SELECT * FROM entities WHERE id = ?`)
+          .get(existing.id) as EntityRow;
+
+        syncEntityFts(this.db, updated);
+        return { ...toEntity(updated), isNew: false };
+      }
+
+      // Insert new entity
+      const id = randomUUID();
       this.db
         .prepare(
-          `UPDATE entities SET summary = COALESCE(?, summary), embedding = COALESCE(?, embedding), ` +
-            `confidence = ?, source = ?, updated_at = ? WHERE id = ?`,
+          `INSERT INTO entities (id, name, type, summary, embedding, confidence, source, valid_from, valid_until, created_at, updated_at) ` +
+            `VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
         )
         .run(
+          id,
+          input.name,
+          input.type,
           input.summary ?? null,
           embeddingJson,
-          input.confidence ?? existing.confidence,
-          input.source ?? existing.source,
+          input.confidence ?? 1.0,
+          input.source ?? "auto",
+          input.validFrom ?? now,
           now,
-          existing.id,
+          now,
         );
 
-      const updated = this.db
-        .prepare(`SELECT * FROM entities WHERE id = ?`)
-        .get(existing.id) as EntityRow;
-
-      syncEntityFts(this.db, updated);
-      return toEntity(updated);
-    }
-
-    // Insert new entity
-    const id = randomUUID();
-    this.db
-      .prepare(
-        `INSERT INTO entities (id, name, type, summary, embedding, confidence, source, valid_from, valid_until, created_at, updated_at) ` +
-          `VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-      )
-      .run(
-        id,
-        input.name,
-        input.type,
-        input.summary ?? null,
-        embeddingJson,
-        input.confidence ?? 1.0,
-        input.source ?? "auto",
-        input.validFrom ?? now,
-        now,
-        now,
-      );
-
-    const row = this.db.prepare(`SELECT * FROM entities WHERE id = ?`).get(id) as EntityRow;
-    syncEntityFts(this.db, row);
-    return toEntity(row);
+      const row = this.db.prepare(`SELECT * FROM entities WHERE id = ?`).get(id) as EntityRow;
+      syncEntityFts(this.db, row);
+      return { ...toEntity(row), isNew: true };
+    });
   }
 
   getEntity(id: string): Entity | null {
@@ -191,26 +216,28 @@ export class MemoryGraphEngine {
 
   /** Mark an entity as no longer valid (soft delete with temporal tracking). */
   invalidateEntity(id: string, reason?: string): void {
-    const now = Date.now();
-    this.db
-      .prepare(`UPDATE entities SET valid_until = ?, updated_at = ? WHERE id = ? AND valid_until IS NULL`)
-      .run(now, now, id);
-
-    // Also invalidate outgoing/incoming edges
-    this.db
-      .prepare(
-        `UPDATE edges SET valid_until = ? WHERE (from_id = ? OR to_id = ?) AND valid_until IS NULL`,
-      )
-      .run(now, id, id);
-
-    removeEntityFts(this.db, id);
-
-    if (reason) {
-      // Store invalidation reason in meta for audit
+    this.runInTransaction(() => {
+      const now = Date.now();
       this.db
-        .prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)`)
-        .run(`invalidation:${id}`, JSON.stringify({ reason, timestamp: now }));
-    }
+        .prepare(`UPDATE entities SET valid_until = ?, updated_at = ? WHERE id = ? AND valid_until IS NULL`)
+        .run(now, now, id);
+
+      // Also invalidate outgoing/incoming edges
+      this.db
+        .prepare(
+          `UPDATE edges SET valid_until = ? WHERE (from_id = ? OR to_id = ?) AND valid_until IS NULL`,
+        )
+        .run(now, id, id);
+
+      removeEntityFts(this.db, id);
+
+      if (reason) {
+        // Store invalidation reason in meta for audit
+        this.db
+          .prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)`)
+          .run(`invalidation:${id}`, JSON.stringify({ reason, timestamp: now }));
+      }
+    });
   }
 
   // -- Edge CRUD ------------------------------------------------------------
@@ -299,26 +326,44 @@ export class MemoryGraphEngine {
 
     let frontier = [entityId];
     for (let d = 0; d < depth && frontier.length > 0; d++) {
-      const nextFrontier: string[] = [];
-      for (const nodeId of frontier) {
-        const edges = this.findEdges({ entityId: nodeId, activeOnly: true, limit: 50 });
-        for (const edge of edges) {
-          if (visitedEdges.has(edge.id)) continue;
-          visitedEdges.add(edge.id);
-          resultEdges.push(edge);
+      // Batch query: fetch all edges touching frontier nodes in one SQL
+      const placeholders = frontier.map(() => "?").join(",");
+      const edgeRows = this.db
+        .prepare(
+          `SELECT * FROM edges WHERE ` +
+            `(from_id IN (${placeholders}) OR to_id IN (${placeholders})) ` +
+            `AND valid_until IS NULL`,
+        )
+        .all(...frontier, ...frontier) as EdgeRow[];
 
-          const neighborId = edge.from_id === nodeId ? edge.to_id : edge.from_id;
-          if (!visitedEntities.has(neighborId)) {
-            visitedEntities.add(neighborId);
-            const neighbor = this.getEntity(neighborId);
-            if (neighbor) {
-              resultEntities.push(neighbor);
-              nextFrontier.push(neighborId);
-            }
+      const newNeighborIds = new Set<string>();
+      for (const row of edgeRows) {
+        const edge = toEdge(row);
+        if (visitedEdges.has(edge.id)) continue;
+        visitedEdges.add(edge.id);
+        resultEdges.push(edge);
+
+        for (const candidateId of [edge.from_id, edge.to_id]) {
+          if (!visitedEntities.has(candidateId)) {
+            newNeighborIds.add(candidateId);
+            visitedEntities.add(candidateId);
           }
         }
       }
-      frontier = nextFrontier;
+
+      // Batch fetch new neighbor entities
+      if (newNeighborIds.size > 0) {
+        const ids = [...newNeighborIds];
+        const ePlaceholders = ids.map(() => "?").join(",");
+        const entityRows = this.db
+          .prepare(`SELECT * FROM entities WHERE id IN (${ePlaceholders})`)
+          .all(...ids) as EntityRow[];
+        for (const row of entityRows) {
+          resultEntities.push(toEntity(row));
+        }
+      }
+
+      frontier = [...newNeighborIds];
     }
 
     return { entities: resultEntities, edges: resultEdges };

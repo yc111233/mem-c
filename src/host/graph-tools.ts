@@ -8,7 +8,7 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
-import type { MemoryGraphEngine, EntityInput, EdgeInput } from "./graph-engine.js";
+import type { MemoryGraphEngine, EntityInput } from "./graph-engine.js";
 import {
   buildL1Context,
   buildL2Context,
@@ -88,14 +88,6 @@ export function memoryStore(
   engine: MemoryGraphEngine,
   input: MemoryStoreInput,
 ): MemoryStoreOutput {
-  // Check if entity already exists
-  const existing = engine.findEntities({
-    name: input.name,
-    type: input.type as EntityInput["type"],
-    activeOnly: true,
-    limit: 1,
-  });
-
   const entity = engine.upsertEntity({
     name: input.name,
     type: input.type,
@@ -125,7 +117,7 @@ export function memoryStore(
   return {
     entityId: entity.id,
     name: entity.name,
-    isNew: existing.length === 0,
+    isNew: entity.isNew,
     edgesCreated,
   };
 }

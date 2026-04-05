@@ -102,17 +102,25 @@ export function searchGraph(
     }
   }
 
-  // If no candidates found, do a fallback name LIKE search
+  // If no candidates found, do a fallback LIKE search (name > summary)
   if (candidateScores.size === 0) {
     const likePattern = `%${query}%`;
     const validClause = activeOnly ? `AND valid_until IS NULL` : "";
-    const fallbackRows = db
-      .prepare(
-        `SELECT id FROM entities WHERE (name LIKE ? OR summary LIKE ?) ${validClause} LIMIT ?`,
-      )
-      .all(likePattern, likePattern, candidateLimit) as Array<{ id: string }>;
-    for (const row of fallbackRows) {
-      candidateScores.set(row.id, { vector: 0, fts: 0.3 });
+
+    const nameHits = db
+      .prepare(`SELECT id FROM entities WHERE name LIKE ? ${validClause} LIMIT ?`)
+      .all(likePattern, candidateLimit) as Array<{ id: string }>;
+    for (const row of nameHits) {
+      candidateScores.set(row.id, { vector: 0, fts: 0.5 });
+    }
+
+    const summaryHits = db
+      .prepare(`SELECT id FROM entities WHERE summary LIKE ? ${validClause} LIMIT ?`)
+      .all(likePattern, candidateLimit) as Array<{ id: string }>;
+    for (const row of summaryHits) {
+      if (!candidateScores.has(row.id)) {
+        candidateScores.set(row.id, { vector: 0, fts: 0.2 });
+      }
     }
   }
 
@@ -192,20 +200,25 @@ export function searchGraph(
 
 type VectorHit = { id: string; similarity: number };
 
+// TODO: integrate sqlite-vec for native ANN search to avoid full table scan
+const VECTOR_SCAN_LIMIT = 5000;
+
 function vectorSearchEntities(
   db: DatabaseSync,
   queryEmbedding: number[],
   limit: number,
   activeOnly: boolean,
 ): VectorHit[] {
-  // Try sqlite-vec virtual table first
   try {
-    // Compute cosine similarity manually for portability
+    // Full scan with recency bias — most recently updated entities are searched first
+    const scanLimit = Math.min(VECTOR_SCAN_LIMIT, Math.max(limit * 2, 100));
     const rows = db
       .prepare(
-        `SELECT id, embedding FROM entities WHERE embedding IS NOT NULL ${activeOnly ? "AND valid_until IS NULL" : ""} LIMIT ?`,
+        `SELECT id, embedding FROM entities WHERE embedding IS NOT NULL ` +
+          `${activeOnly ? "AND valid_until IS NULL " : ""}` +
+          `ORDER BY updated_at DESC LIMIT ?`,
       )
-      .all(limit * 2) as Array<{ id: string; embedding: string }>;
+      .all(scanLimit) as Array<{ id: string; embedding: string }>;
 
     const hits: VectorHit[] = [];
     for (const row of rows) {

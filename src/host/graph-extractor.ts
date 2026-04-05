@@ -141,106 +141,102 @@ export async function extractAndMerge(params: {
     return result;
   }
 
-  // Process invalidations first
-  for (const inv of extraction.invalidations) {
-    try {
-      const matches = params.engine.findEntities({
-        name: inv.name,
-        type: inv.type,
-        activeOnly: true,
-        limit: 1,
-      });
-      if (matches.length > 0) {
-        params.engine.invalidateEntity(matches[0]!.id, inv.reason);
-        result.invalidated++;
+  // Wrap all database mutations in a single transaction
+  params.engine.runInTransaction(() => {
+    // Process invalidations first
+    for (const inv of extraction.invalidations) {
+      try {
+        const matches = params.engine.findEntities({
+          name: inv.name,
+          type: inv.type,
+          activeOnly: true,
+          limit: 1,
+        });
+        if (matches.length > 0) {
+          params.engine.invalidateEntity(matches[0]!.id, inv.reason);
+          result.invalidated++;
+        }
+      } catch (err) {
+        result.errors.push(`Invalidation failed for "${inv.name}": ${err instanceof Error ? err.message : String(err)}`);
       }
-    } catch (err) {
-      result.errors.push(`Invalidation failed for "${inv.name}": ${err instanceof Error ? err.message : String(err)}`);
     }
-  }
 
-  // Upsert entities
-  const nameToId = new Map<string, string>();
-  for (const extracted of extraction.entities) {
-    try {
-      const existing = params.engine.findEntities({
-        name: extracted.name,
-        type: extracted.type,
-        activeOnly: true,
-        limit: 1,
-      });
-
-      const entity = params.engine.upsertEntity({
-        name: extracted.name,
-        type: extracted.type,
-        summary: extracted.summary,
-        confidence: extracted.confidence,
-        source: "auto",
-      });
-
-      nameToId.set(`${extracted.name}:${extracted.type}`, entity.id);
-
-      if (existing.length > 0) {
-        result.entitiesUpdated++;
-      } else {
-        result.entitiesCreated++;
-      }
-    } catch (err) {
-      result.errors.push(`Entity upsert failed for "${extracted.name}": ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  // Create edges
-  for (const rel of extraction.relations) {
-    try {
-      const fromId = nameToId.get(`${rel.fromName}:${rel.fromType}`);
-      const toId = nameToId.get(`${rel.toName}:${rel.toType}`);
-
-      if (!fromId || !toId) {
-        // Ensure both entities exist
-        const from = params.engine.upsertEntity({
-          name: rel.fromName,
-          type: rel.fromType,
+    // Upsert entities
+    const nameToId = new Map<string, string>();
+    for (const extracted of extraction.entities) {
+      try {
+        const entity = params.engine.upsertEntity({
+          name: extracted.name,
+          type: extracted.type,
+          summary: extracted.summary,
+          confidence: extracted.confidence,
           source: "auto",
         });
-        const to = params.engine.upsertEntity({
-          name: rel.toName,
-          type: rel.toType,
-          source: "auto",
-        });
-        params.engine.addEdge({
-          fromId: from.id,
-          toId: to.id,
-          relation: rel.relation,
-        });
-      } else {
-        params.engine.addEdge({
-          fromId,
-          toId,
-          relation: rel.relation,
-        });
-      }
-      result.edgesCreated++;
-    } catch (err) {
-      result.errors.push(`Edge creation failed for "${rel.fromName}" -> "${rel.toName}": ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
 
-  // Record episode
-  try {
-    const entityIds = Array.from(nameToId.values());
-    params.engine.recordEpisode({
-      sessionKey: params.sessionKey,
-      turnIndex: params.turnIndex,
-      content: params.transcript.length > 2000
-        ? params.transcript.slice(0, 2000) + "..."
-        : params.transcript,
-      extractedEntityIds: entityIds,
-    });
-    result.episodeRecorded = true;
-  } catch (err) {
-    result.errors.push(`Episode recording failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
+        nameToId.set(`${extracted.name}:${extracted.type}`, entity.id);
+
+        if (entity.isNew) {
+          result.entitiesCreated++;
+        } else {
+          result.entitiesUpdated++;
+        }
+      } catch (err) {
+        result.errors.push(`Entity upsert failed for "${extracted.name}": ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // Create edges
+    for (const rel of extraction.relations) {
+      try {
+        const fromId = nameToId.get(`${rel.fromName}:${rel.fromType}`);
+        const toId = nameToId.get(`${rel.toName}:${rel.toType}`);
+
+        if (!fromId || !toId) {
+          // Ensure both entities exist
+          const from = params.engine.upsertEntity({
+            name: rel.fromName,
+            type: rel.fromType,
+            source: "auto",
+          });
+          const to = params.engine.upsertEntity({
+            name: rel.toName,
+            type: rel.toType,
+            source: "auto",
+          });
+          params.engine.addEdge({
+            fromId: from.id,
+            toId: to.id,
+            relation: rel.relation,
+          });
+        } else {
+          params.engine.addEdge({
+            fromId,
+            toId,
+            relation: rel.relation,
+          });
+        }
+        result.edgesCreated++;
+      } catch (err) {
+        result.errors.push(`Edge creation failed for "${rel.fromName}" -> "${rel.toName}": ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // Record episode
+    try {
+      const entityIds = Array.from(nameToId.values());
+      params.engine.recordEpisode({
+        sessionKey: params.sessionKey,
+        turnIndex: params.turnIndex,
+        content: params.transcript.length > 2000
+          ? params.transcript.slice(0, 2000) + "..."
+          : params.transcript,
+        extractedEntityIds: entityIds,
+      });
+      result.episodeRecorded = true;
+    } catch (err) {
+      result.errors.push(`Episode recording failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
 
   return result;
 }
