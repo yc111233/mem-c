@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MemoryGraphEngine, type Entity } from "../host/graph-engine.js";
+import { MemoryGraphEngine, computeImportance, type Entity } from "../host/graph-engine.js";
 import { ensureGraphSchema } from "../host/graph-schema.js";
 import { searchGraph } from "../host/graph-search.js";
 
@@ -383,5 +383,133 @@ describe("searchGraph", () => {
 
     const results = searchGraph(db, engine, "xyznonexistent123", { minScore: 0.5 });
     expect(results).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B1: Access tracking and importance scoring
+// ---------------------------------------------------------------------------
+
+describe("touchEntity", () => {
+  let db: DatabaseSync;
+  let engine: MemoryGraphEngine;
+
+  beforeEach(() => {
+    db = createTestDb();
+    engine = new MemoryGraphEngine(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("increments access_count and updates last_accessed_at", () => {
+    const e = engine.upsertEntity({ name: "React", type: "concept" });
+    expect(e.access_count).toBe(0);
+    expect(e.last_accessed_at).toBe(0);
+
+    engine.touchEntity(e.id);
+    const updated = engine.getEntity(e.id)!;
+    expect(updated.access_count).toBe(1);
+    expect(updated.last_accessed_at).toBeGreaterThan(0);
+
+    engine.touchEntity(e.id);
+    const updated2 = engine.getEntity(e.id)!;
+    expect(updated2.access_count).toBe(2);
+  });
+});
+
+describe("computeImportance", () => {
+  it("gives higher score to entities with more edges", () => {
+    const now = Date.now();
+    const base: Entity = {
+      id: "1", name: "A", type: "concept", summary: null, embedding: null,
+      confidence: 1, source: "auto", valid_from: now, valid_until: null,
+      created_at: now, updated_at: now, access_count: 0, last_accessed_at: 0,
+    };
+
+    const low = computeImportance(base, 0, now);
+    const high = computeImportance(base, 10, now);
+    expect(high).toBeGreaterThan(low);
+  });
+
+  it("gives higher score to recently accessed entities", () => {
+    const now = Date.now();
+    const base: Entity = {
+      id: "1", name: "A", type: "concept", summary: null, embedding: null,
+      confidence: 1, source: "auto", valid_from: now, valid_until: null,
+      created_at: now, updated_at: now, access_count: 5, last_accessed_at: now,
+    };
+    const stale: Entity = {
+      ...base, access_count: 5, last_accessed_at: now - 30 * 86_400_000,
+    };
+
+    expect(computeImportance(base, 0, now)).toBeGreaterThan(computeImportance(stale, 0, now));
+  });
+
+  it("gives higher score to higher confidence", () => {
+    const now = Date.now();
+    const base: Entity = {
+      id: "1", name: "A", type: "concept", summary: null, embedding: null,
+      confidence: 1, source: "auto", valid_from: now, valid_until: null,
+      created_at: now, updated_at: now, access_count: 0, last_accessed_at: 0,
+    };
+
+    const highConf = computeImportance({ ...base, confidence: 1.0 }, 0, now);
+    const lowConf = computeImportance({ ...base, confidence: 0.3 }, 0, now);
+    expect(highConf).toBeGreaterThan(lowConf);
+  });
+});
+
+describe("getEntitiesByImportance", () => {
+  let db: DatabaseSync;
+  let engine: MemoryGraphEngine;
+
+  beforeEach(() => {
+    db = createTestDb();
+    engine = new MemoryGraphEngine(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("returns entities sorted by importance score", () => {
+    const e1 = engine.upsertEntity({ name: "Popular", type: "concept", confidence: 1.0 });
+    const e2 = engine.upsertEntity({ name: "Obscure", type: "concept", confidence: 0.3 });
+    const e3 = engine.upsertEntity({ name: "Connected", type: "concept", confidence: 0.8 });
+
+    // Add edges to make e3 more connected
+    engine.addEdge({ fromId: e3.id, toId: e1.id, relation: "uses" });
+    engine.addEdge({ fromId: e3.id, toId: e2.id, relation: "relates" });
+
+    // Touch e1 to boost access score
+    engine.touchEntity(e1.id);
+    engine.touchEntity(e1.id);
+    engine.touchEntity(e1.id);
+
+    const ranked = engine.getEntitiesByImportance();
+    expect(ranked.length).toBe(3);
+    // All should have importance scores
+    for (const r of ranked) {
+      expect(r.importance).toBeGreaterThan(0);
+    }
+    // Should be sorted descending
+    expect(ranked[0]!.importance).toBeGreaterThanOrEqual(ranked[1]!.importance);
+    expect(ranked[1]!.importance).toBeGreaterThanOrEqual(ranked[2]!.importance);
+  });
+
+  it("respects maxEntities limit", () => {
+    engine.upsertEntity({ name: "A", type: "concept" });
+    engine.upsertEntity({ name: "B", type: "concept" });
+    engine.upsertEntity({ name: "C", type: "concept" });
+
+    const ranked = engine.getEntitiesByImportance({ maxEntities: 2 });
+    expect(ranked).toHaveLength(2);
+  });
+
+  it("returns empty for no entities", () => {
+    const ranked = engine.getEntitiesByImportance();
+    expect(ranked).toHaveLength(0);
   });
 });

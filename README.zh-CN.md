@@ -9,6 +9,9 @@
 - **时序版本管理** — 实体和边使用 `valid_from` / `valid_until` 标记，追踪事实的变化历程
 - **混合检索** — 向量相似度 + FTS5 全文搜索 + 图连通性 + 时间衰减评分
 - **分层上下文加载** — L0（实体名册，~200 tokens）/ L1（搜索结果，~800 tokens）/ L2（完整详情，~2000 tokens）
+- **实体重要性评分** — 综合指标（时效性 + 连接度 + 访问频率 + 置信度）实现更智能的 L0 注入
+- **图谱整合** — 自动合并重复实体、衰减过时实体、清理低置信孤立实体
+- **压缩感知** — 压缩前提取钩子 + 压缩后 L0 增强，防止知识丢失
 - **LLM 自动抽取** — 从对话文本中自动提取实体和关系
 - **零基础设施** — 纯 `node:sqlite`（Node 22+），无需外部数据库
 
@@ -17,9 +20,10 @@
 ```
 src/host/
 ├── graph-schema.ts         # SQLite DDL + FTS5 虚拟表
-├── graph-engine.ts         # CRUD + 图遍历 + 时序版本管理
+├── graph-engine.ts         # CRUD + 图遍历 + 时序版本管理 + 重要性评分
 ├── graph-search.ts         # 混合检索（向量 + FTS + 图 + 时间衰减）
-├── graph-context-loader.ts # L0/L1/L2 分层上下文加载
+├── graph-context-loader.ts # L0/L1/L2 分层上下文加载（查询感知、重要性感知）
+├── graph-consolidator.ts   # 图谱卫生：合并重复、衰减过时、清理孤立
 ├── graph-extractor.ts      # LLM 实体/关系抽取
 ├── graph-migrate.ts        # Markdown 记忆 → 图谱迁移
 └── graph-tools.ts          # 智能体工具接口
@@ -102,6 +106,38 @@ const result = await extractAndMerge({
 | `memoryDetail` | L2 上下文 | 获取完整实体详情 |
 | `memoryGraph` | 图可视化 | 展示实体关系 |
 | `memoryInvalidate` | 软删除 | 标记事实为过时 |
+| `memoryConsolidate` | 图谱卫生 | 合并重复、衰减过时、清理孤立 |
+
+## 重要性评分
+
+实体通过综合重要性分数排序，实现更智能的 L0 上下文注入：
+
+```typescript
+// 重要性 = 0.3 × 时效性 + 0.3 × 连接度 + 0.25 × 访问分 + 0.15 × 置信度
+const l0 = buildL0Context(engine, { maxTokens: 200, useImportance: true });
+```
+
+访问追踪自动完成 — 搜索命中和详情查看会自动调用 `touchEntity()`。
+
+## 图谱整合
+
+定期清理以维护图谱卫生：
+
+```typescript
+import { consolidateGraph } from "openclaw-memory";
+
+// 先预览
+const preview = consolidateGraph(engine, { dryRun: true });
+console.log(preview); // { merged: 2, decayed: 5, pruned: 3, errors: [] }
+
+// 执行
+const result = consolidateGraph(engine);
+```
+
+四个阶段在单一事务中执行：
+1. **合并** — 同名不同类型的实体 → 保留最高置信度的
+2. **衰减** — 降低 30+ 天未访问实体的置信度
+3. **清理** — 使低置信度孤立实体失效（无连接，置信度 < 0.3）
 
 ## 从 Markdown 迁移
 

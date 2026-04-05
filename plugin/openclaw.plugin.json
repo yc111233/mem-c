@@ -32,6 +32,12 @@
       "placeholder": "6",
       "advanced": true,
       "help": "Default max results for memory_graph_search tool"
+    },
+    "recallAvailableBudget": {
+      "label": "Available Token Budget",
+      "placeholder": "0",
+      "advanced": true,
+      "help": "Total token budget for memory context injection. 0 = use defaults. When set, L0/L1/L2 budgets are derived automatically."
     }
   },
   "configSchema": {
@@ -43,7 +49,8 @@
       "autoRecall": { "type": "boolean" },
       "recallMaxTokens": { "type": "number" },
       "recallMaxEntities": { "type": "number" },
-      "searchMaxResults": { "type": "number" }
+      "searchMaxResults": { "type": "number" },
+      "recallAvailableBudget": { "type": "number" }
     }
   }
 }

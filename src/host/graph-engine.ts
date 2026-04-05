@@ -240,6 +240,91 @@ export class MemoryGraphEngine {
     });
   }
 
+  /** Increment access counter and update last_accessed_at for an entity. */
+  touchEntity(id: string): void {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `UPDATE entities SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?`,
+      )
+      .run(now, id);
+  }
+
+  /** Update confidence for an entity (used by consolidation). */
+  updateConfidence(id: string, confidence: number): void {
+    const now = Date.now();
+    this.db
+      .prepare(`UPDATE entities SET confidence = ?, updated_at = ? WHERE id = ?`)
+      .run(Math.max(0.1, confidence), now, id);
+  }
+
+  /**
+   * Reassign all active edges from one entity to another.
+   * Used during entity merge to redirect relationships.
+   */
+  reassignEdges(fromEntityId: string, toEntityId: string): number {
+    let count = 0;
+    const now = Date.now();
+    // Redirect outgoing edges
+    const r1 = this.db
+      .prepare(
+        `UPDATE edges SET from_id = ? WHERE from_id = ? AND valid_until IS NULL AND to_id != ?`,
+      )
+      .run(toEntityId, fromEntityId, toEntityId);
+    count += (r1 as { changes?: number }).changes ?? 0;
+    // Redirect incoming edges
+    const r2 = this.db
+      .prepare(
+        `UPDATE edges SET to_id = ? WHERE to_id = ? AND valid_until IS NULL AND from_id != ?`,
+      )
+      .run(toEntityId, fromEntityId, toEntityId);
+    count += (r2 as { changes?: number }).changes ?? 0;
+    // Invalidate self-loops that may have been created
+    this.db
+      .prepare(
+        `UPDATE edges SET valid_until = ? WHERE from_id = ? AND to_id = ? AND valid_until IS NULL`,
+      )
+      .run(now, toEntityId, toEntityId);
+    return count;
+  }
+
+  /**
+   * Get active entities sorted by importance score.
+   * Importance combines recency, degree centrality, access frequency, and confidence.
+   */
+  getEntitiesByImportance(opts?: {
+    maxEntities?: number;
+    type?: EntityType;
+  }): Array<Entity & { importance: number }> {
+    const maxEntities = opts?.maxEntities ?? 100;
+    const entities = this.getActiveEntities(opts?.type);
+    if (entities.length === 0) return [];
+
+    // Batch edge counts in one query
+    const edgeCounts = new Map<string, number>();
+    const rows = this.db
+      .prepare(
+        `SELECT id, cnt FROM (` +
+          `SELECT from_id AS id, COUNT(*) AS cnt FROM edges WHERE valid_until IS NULL GROUP BY from_id ` +
+          `UNION ALL ` +
+          `SELECT to_id AS id, COUNT(*) AS cnt FROM edges WHERE valid_until IS NULL GROUP BY to_id` +
+        `)`,
+      )
+      .all() as Array<{ id: string; cnt: number }>;
+    for (const r of rows) {
+      edgeCounts.set(r.id, (edgeCounts.get(r.id) ?? 0) + r.cnt);
+    }
+
+    const now = Date.now();
+    const scored = entities.map((entity) => ({
+      ...entity,
+      importance: computeImportance(entity, edgeCounts.get(entity.id) ?? 0, now),
+    }));
+
+    scored.sort((a, b) => b.importance - a.importance);
+    return scored.slice(0, maxEntities);
+  }
+
   // -- Edge CRUD ------------------------------------------------------------
 
   addEdge(input: EdgeInput): Edge {
@@ -429,6 +514,29 @@ export class MemoryGraphEngine {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Compute a composite importance score for an entity.
+ * Combines recency, degree centrality, access frequency, and confidence.
+ */
+export function computeImportance(entity: Entity, edgeCount: number, now: number): number {
+  const ageDays = (now - entity.updated_at) / 86_400_000;
+  const recency = Math.pow(0.5, ageDays / 30); // 30-day half-life
+
+  const degree = Math.min(1, edgeCount / 10); // capped at 10 edges
+
+  const accessDays =
+    entity.last_accessed_at > 0
+      ? (now - entity.last_accessed_at) / 86_400_000
+      : 999;
+  const accessScore =
+    entity.access_count > 0
+      ? Math.min(1, Math.log2(entity.access_count + 1) / 5) *
+        Math.pow(0.5, accessDays / 14)
+      : 0;
+
+  return 0.3 * recency + 0.3 * degree + 0.25 * accessScore + 0.15 * entity.confidence;
+}
 
 function toEntity(row: EntityRow): Entity {
   let embeddingVector: number[] | undefined;

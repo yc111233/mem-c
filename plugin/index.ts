@@ -21,8 +21,12 @@ import {
   memoryDetail,
   memoryGraph,
   memoryInvalidate,
+  memoryConsolidate,
+  consolidateGraph,
   buildL0Context,
+  buildQueryAwareL0Context,
   formatL0AsPromptSection,
+  suggestBudgets,
   extractAndMerge,
   type LlmExtractFn,
 } from "openclaw-memory";
@@ -88,6 +92,31 @@ function extractAllUserText(messages?: unknown[]): string {
   return texts.join("\n\n");
 }
 
+/** Extract the latest user message text (for query-aware L0 injection). */
+function extractLatestUserText(messages?: unknown[]): string {
+  if (!messages || !Array.isArray(messages)) return "";
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") continue;
+    const msgObj = msg as Record<string, unknown>;
+    if (msgObj.role !== "user") continue;
+    if (typeof msgObj.content === "string") return msgObj.content;
+    if (Array.isArray(msgObj.content)) {
+      for (const block of msgObj.content) {
+        if (
+          block &&
+          typeof block === "object" &&
+          (block as Record<string, unknown>).type === "text" &&
+          typeof (block as Record<string, unknown>).text === "string"
+        ) {
+          return (block as Record<string, unknown>).text as string;
+        }
+      }
+    }
+  }
+  return "";
+}
+
 // ---------------------------------------------------------------------------
 // Plugin Definition
 // ---------------------------------------------------------------------------
@@ -148,6 +177,7 @@ export default {
           return {
             content: [{ type: "text", text: result.formatted || "No matching entities found." }],
             details: { count: result.results.length, results: result.results },
+            clearable: true,
           };
         },
       }),
@@ -194,6 +224,7 @@ export default {
               text: `${action} entity "${result.name}" (${result.edgesCreated} relations created).`,
             }],
             details: result,
+            clearable: true,
           };
         },
       }),
@@ -221,6 +252,7 @@ export default {
           return {
             content: [{ type: "text", text: result.formatted }],
             details: { found: result.found, entityId: result.entityId },
+            clearable: true,
           };
         },
       }),
@@ -246,6 +278,7 @@ export default {
           return {
             content: [{ type: "text", text: result.formatted }],
             details: { found: result.found, entities: result.entities.length, edges: result.edges.length },
+            clearable: true,
           };
         },
       }),
@@ -275,23 +308,99 @@ export default {
           return {
             content: [{ type: "text", text }],
             details: result,
+            clearable: true,
           };
         },
       }),
       { name: "memory_invalidate" },
     );
 
+    // -- memory_consolidate ---------------------------------------------------
+    api.registerTool(
+      (_ctx: ToolContext) => ({
+        name: "memory_consolidate",
+        label: "Memory Consolidate (Graph)",
+        description:
+          "Consolidate the knowledge graph: merge duplicate entities, " +
+          "decay stale ones, and prune low-confidence orphans.",
+        parameters: {
+          type: "object",
+          properties: {
+            dryRun: { type: "boolean", description: "Preview changes without applying (default: false)" },
+          },
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const result = memoryConsolidate(engine, params as { dryRun?: boolean });
+          const parts = [
+            result.merged > 0 ? `${result.merged} merged` : null,
+            result.decayed > 0 ? `${result.decayed} decayed` : null,
+            result.pruned > 0 ? `${result.pruned} pruned` : null,
+          ].filter(Boolean);
+          const summary = parts.length > 0 ? parts.join(", ") : "no changes needed";
+          const prefix = (params as { dryRun?: boolean }).dryRun ? "[dry run] " : "";
+          return {
+            content: [{ type: "text", text: `${prefix}Consolidation: ${summary}.` }],
+            details: result,
+            clearable: true,
+          };
+        },
+      }),
+      { name: "memory_consolidate" },
+    );
+
     // ========================================================================
     // Lifecycle Hooks
     // ========================================================================
 
+    // Track message count for compaction detection (C3)
+    let lastMessageCount = 0;
+
     // -- Auto-recall: inject L0 entity roster before agent starts -------------
     if (cfg.autoRecall) {
-      api.on("before_agent_start", async () => {
-        const l0 = buildL0Context(engine, {
-          maxEntities: cfg.recallMaxEntities,
-          maxTokens: cfg.recallMaxTokens,
-        });
+      api.on("before_agent_start", async (event) => {
+        const eventObj = (event ?? {}) as {
+          messages?: unknown[];
+          prompt?: string;
+        };
+
+        // C3: detect compaction (message count dropped by >50%)
+        const currentMessageCount = Array.isArray(eventObj.messages) ? eventObj.messages.length : 0;
+        const compactionDetected = lastMessageCount > 0 && currentMessageCount < lastMessageCount * 0.5;
+        lastMessageCount = currentMessageCount;
+
+        // Derive token budget: explicit config > default heuristic
+        const budget = suggestBudgets(
+          cfg.recallAvailableBudget > 0
+            ? cfg.recallAvailableBudget
+            : cfg.recallMaxTokens * 5,
+        );
+
+        // C3: boost L0 budget after compaction to compensate for lost context
+        const effectiveL0Budget = compactionDetected
+          ? Math.floor(budget.l0 * 1.5)
+          : budget.l0;
+
+        if (compactionDetected) {
+          api.logger.info("memory-graph: compaction detected, boosting L0 context");
+        }
+
+        // Extract latest user query for query-aware injection
+        const queryText =
+          extractLatestUserText(eventObj.messages) ||
+          (typeof eventObj.prompt === "string" ? eventObj.prompt.trim() : "");
+
+        const l0 =
+          queryText.length >= 5
+            ? buildQueryAwareL0Context(db, engine, queryText, {
+                maxEntities: cfg.recallMaxEntities,
+                maxTokens: effectiveL0Budget,
+                useImportance: true,
+              })
+            : buildL0Context(engine, {
+                maxEntities: cfg.recallMaxEntities,
+                maxTokens: effectiveL0Budget,
+                useImportance: true,
+              });
 
         if (l0.entries.length === 0) return;
 
@@ -346,8 +455,63 @@ export default {
               `${result.edgesCreated} edges, ${result.invalidated} invalidations` +
               (result.errors.length > 0 ? ` (${result.errors.length} errors)` : ""),
           );
+
+          // Auto-consolidation: run at most once per 24 hours
+          try {
+            const lastRow = db.prepare(`SELECT value FROM meta WHERE key = 'last_consolidate_at'`).get() as
+              | { value: string }
+              | undefined;
+            const lastConsolidateAt = lastRow ? Number(lastRow.value) : 0;
+            const hoursSince = (Date.now() - lastConsolidateAt) / 3_600_000;
+            if (hoursSince >= 24) {
+              const cr = consolidateGraph(engine);
+              db.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('last_consolidate_at', ?)`)
+                .run(String(Date.now()));
+              if (cr.merged + cr.decayed + cr.pruned > 0) {
+                api.logger.info(
+                  `memory-graph: auto-consolidation — ${cr.merged} merged, ${cr.decayed} decayed, ${cr.pruned} pruned`,
+                );
+              }
+            }
+          } catch (err) {
+            api.logger.warn(`memory-graph: auto-consolidation failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
         } catch (err) {
           api.logger.warn(`memory-graph: auto-extract failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      });
+    }
+
+    // -- C2: Pre-compaction hook — extract entities before context is compressed --
+    if (cfg.autoExtract) {
+      api.on("before_compaction", async (event) => {
+        const eventObj = (event ?? {}) as {
+          messages?: unknown[];
+          sessionId?: string;
+          sessionKey?: string;
+          llmExtract?: LlmExtractFn;
+        };
+
+        const transcript = extractAllUserText(eventObj.messages);
+        if (transcript.length < 50) return;
+
+        const llmExtract = eventObj.llmExtract;
+        if (!llmExtract) return;
+
+        try {
+          const existingNames = engine.getActiveEntities().map((e) => e.name);
+          await extractAndMerge({
+            engine,
+            transcript,
+            sessionKey: eventObj.sessionKey ?? eventObj.sessionId ?? "unknown",
+            llmExtract,
+            existingEntityNames: existingNames,
+          });
+          api.logger.info("memory-graph: pre-compaction extraction complete");
+        } catch (err) {
+          api.logger.warn(
+            `memory-graph: pre-compaction extraction failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
       });
     }

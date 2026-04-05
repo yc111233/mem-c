@@ -16,6 +16,7 @@ export {
 // Engine (CRUD, traversal, temporal queries)
 export {
   MemoryGraphEngine,
+  computeImportance,
   type EntityInput,
   type EdgeInput,
   type EpisodeInput,
@@ -34,17 +35,21 @@ export {
   type GraphSearchResult,
 } from "./host/graph-search.js";
 
-// Tiered context loading (L0/L1/L2)
+// Tiered context loading (L0/L1/L2) + adaptive budget
 export {
   buildL0Context,
+  buildQueryAwareL0Context,
   buildL1Context,
   buildL2Context,
+  suggestBudgets,
   formatL0AsPromptSection,
   formatL1AsSearchContext,
   formatL2AsDetail,
+  type ContextBudget,
   type L0Context,
   type L1Context,
   type L2Context,
+  type L2DetailLevel,
 } from "./host/graph-context-loader.js";
 
 // Agent tools
@@ -54,6 +59,7 @@ export {
   memoryDetail,
   memoryGraph,
   memoryInvalidate,
+  memoryConsolidate,
   type MemoryGraphSearchInput,
   type MemoryGraphSearchOutput,
   type MemoryStoreInput,
@@ -64,7 +70,16 @@ export {
   type MemoryGraphOutput,
   type MemoryInvalidateInput,
   type MemoryInvalidateOutput,
+  type MemoryConsolidateInput,
+  type MemoryConsolidateOutput,
 } from "./host/graph-tools.js";
+
+// Graph consolidation
+export {
+  consolidateGraph,
+  type ConsolidationResult,
+  type ConsolidationOpts,
+} from "./host/graph-consolidator.js";
 
 // Auto-extraction (LLM-driven)
 export {

@@ -34,6 +34,8 @@ export type EntityRow = {
   valid_until: number | null;
   created_at: number;
   updated_at: number;
+  access_count: number;
+  last_accessed_at: number;
 };
 
 export type EdgeRow = {
@@ -86,12 +88,19 @@ export function ensureGraphSchema(params: {
       valid_from INTEGER NOT NULL,
       valid_until INTEGER,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      access_count INTEGER NOT NULL DEFAULT 0,
+      last_accessed_at INTEGER NOT NULL DEFAULT 0
     );
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_entities_valid ON entities(valid_from, valid_until);`);
+
+  // Migration for pre-v2 databases: add access tracking columns.
+  // On fresh databases these columns already exist in CREATE TABLE; ALTER silently fails.
+  try { db.exec(`ALTER TABLE entities ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE entities ADD COLUMN last_accessed_at INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
 
   // -- edges ------------------------------------------------------------------
   db.exec(`

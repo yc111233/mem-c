@@ -1,6 +1,45 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { MemoryGraphEngine } from "./graph-engine.js";
+import type { Entity, MemoryGraphEngine } from "./graph-engine.js";
 import { searchGraph } from "./graph-search.js";
+
+// ---------------------------------------------------------------------------
+// Budget allocation
+// ---------------------------------------------------------------------------
+
+/**
+ * Suggested token budgets for each context tier.
+ * Returned by `suggestBudgets` based on available host capacity.
+ */
+export type ContextBudget = {
+  l0: number;
+  l1: number;
+  l2: number;
+};
+
+/**
+ * Allocate L0/L1/L2 token budgets based on available capacity from the host.
+ *
+ * Three regimes:
+ * - Comfortable (>=3000): standard 200/800/2000
+ * - Tight (500–2999): proportional compression
+ * - Extreme (<500): minimal L0, residual L1, no L2
+ */
+export function suggestBudgets(availableTokens: number): ContextBudget {
+  if (availableTokens >= 3000) {
+    return { l0: 200, l1: 800, l2: 2000 };
+  }
+  if (availableTokens >= 500) {
+    const l0 = Math.min(100, Math.floor(availableTokens * 0.15));
+    const l1 = Math.min(400, Math.floor(availableTokens * 0.35));
+    const l2 = availableTokens - l0 - l1;
+    return { l0, l1, l2 };
+  }
+  return {
+    l0: Math.min(50, availableTokens),
+    l1: Math.max(0, availableTokens - 50),
+    l2: 0,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Context tiers
@@ -81,14 +120,21 @@ function estimateTokens(text: string): number {
 
 export function buildL0Context(
   engine: MemoryGraphEngine,
-  opts?: { maxEntities?: number; maxTokens?: number },
+  opts?: { maxEntities?: number; maxTokens?: number; useImportance?: boolean },
 ): L0Context {
   const maxEntities = opts?.maxEntities ?? 50;
   const maxTokens = opts?.maxTokens ?? 200;
-  const entities = engine.getActiveEntities();
 
-  // Sort by updated_at DESC to prioritize recently-touched entities
-  const sorted = [...entities].sort((a, b) => b.updated_at - a.updated_at);
+  // When useImportance is true, sort by composite importance score
+  let sorted: Entity[];
+  if (opts?.useImportance) {
+    sorted = engine
+      .getEntitiesByImportance({ maxEntities })
+      .map(({ importance, ...entity }) => entity);
+  } else {
+    const entities = engine.getActiveEntities();
+    sorted = [...entities].sort((a, b) => b.updated_at - a.updated_at);
+  }
 
   const entries: string[] = [];
   let totalTokens = 0;
@@ -117,6 +163,75 @@ export function formatL0AsPromptSection(l0: L0Context): string {
 }
 
 // ---------------------------------------------------------------------------
+// L0: Query-aware entity roster (adaptive injection)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build an L0 roster that prioritizes entities relevant to the user's query,
+ * then backfills with recently-updated entities to fill the token budget.
+ *
+ * Falls back to pure recency (same as `buildL0Context`) when query is empty.
+ */
+export function buildQueryAwareL0Context(
+  db: DatabaseSync,
+  engine: MemoryGraphEngine,
+  query: string,
+  opts?: { maxEntities?: number; maxTokens?: number; queryEmbedding?: number[]; useImportance?: boolean },
+): L0Context {
+  const maxEntities = opts?.maxEntities ?? 50;
+  const maxTokens = opts?.maxTokens ?? 200;
+
+  // If no query, fall back to recency/importance-only
+  if (!query.trim()) {
+    return buildL0Context(engine, { maxEntities, maxTokens, useImportance: opts?.useImportance });
+  }
+
+  // Part 1: query-relevant entities via lightweight search (no edges)
+  const searchResults = searchGraph(db, engine, query, {
+    maxResults: Math.min(maxEntities, 10),
+    includeEdges: false,
+    queryEmbedding: opts?.queryEmbedding,
+  });
+  const relevantIds = new Set(searchResults.map((r) => r.entity.id));
+
+  // Part 2: backfill pool — use importance scoring when available
+  const backfillPool: Entity[] = opts?.useImportance
+    ? engine
+        .getEntitiesByImportance({ maxEntities })
+        .filter((e) => !relevantIds.has(e.id))
+    : [...engine.getActiveEntities()]
+        .sort((a, b) => b.updated_at - a.updated_at)
+        .filter((e) => !relevantIds.has(e.id));
+
+  // Merge: relevant first, then recency
+  const entries: string[] = [];
+  let totalTokens = 0;
+  const headerTokens = estimateTokens("Known entities:\n");
+  totalTokens += headerTokens;
+  let count = 0;
+
+  const tryEmit = (entity: Entity): boolean => {
+    if (count >= maxEntities) return false;
+    const line = `- ${entity.name} (${entity.type})`;
+    const lineTokens = estimateTokens(line + "\n");
+    if (totalTokens + lineTokens > maxTokens) return false;
+    entries.push(line);
+    totalTokens += lineTokens;
+    count++;
+    return true;
+  };
+
+  for (const r of searchResults) {
+    if (!tryEmit(r.entity)) break;
+  }
+  for (const e of backfillPool) {
+    if (!tryEmit(e)) break;
+  }
+
+  return { tier: "L0", entries, estimatedTokens: totalTokens };
+}
+
+// ---------------------------------------------------------------------------
 // L1: Search-triggered context
 // ---------------------------------------------------------------------------
 
@@ -127,15 +242,18 @@ export function buildL1Context(
   opts?: {
     maxResults?: number;
     maxTokens?: number;
+    /** Compact mode: omit relations to save tokens under tight budgets. */
+    compact?: boolean;
     queryEmbedding?: number[];
   },
 ): L1Context {
   const maxResults = opts?.maxResults ?? 6;
   const maxTokens = opts?.maxTokens ?? 800;
+  const compact = opts?.compact ?? false;
 
   const searchResults = searchGraph(db, engine, query, {
     maxResults: maxResults * 2, // over-fetch for token budget trimming
-    includeEdges: true,
+    includeEdges: !compact,
     queryEmbedding: opts?.queryEmbedding,
   });
 
@@ -145,14 +263,16 @@ export function buildL1Context(
   for (const hit of searchResults) {
     if (results.length >= maxResults) break;
 
-    const relations = hit.edges.slice(0, 5).map((edge) => {
-      const isOutgoing = edge.from_id === hit.entity.id;
-      const targetId = isOutgoing ? edge.to_id : edge.from_id;
-      const arrow = isOutgoing ? "->" : "<-";
-      const targetEntity = engine.getEntity(targetId);
-      const targetName = targetEntity?.name ?? targetId.slice(0, 8);
-      return `${arrow} ${edge.relation} ${targetName}`;
-    });
+    const relations = compact
+      ? []
+      : hit.edges.slice(0, 5).map((edge) => {
+          const isOutgoing = edge.from_id === hit.entity.id;
+          const targetId = isOutgoing ? edge.to_id : edge.from_id;
+          const arrow = isOutgoing ? "->" : "<-";
+          const targetEntity = engine.getEntity(targetId);
+          const targetName = targetEntity?.name ?? targetId.slice(0, 8);
+          return `${arrow} ${edge.relation} ${targetName}`;
+        });
 
     const entry = {
       name: hit.entity.name,
@@ -197,40 +317,47 @@ export function formatL1AsSearchContext(l1: L1Context): string {
 // L2: Full entity detail (on-demand)
 // ---------------------------------------------------------------------------
 
+export type L2DetailLevel = "full" | "summary" | "minimal";
+
 export function buildL2Context(
   engine: MemoryGraphEngine,
   entityId: string,
-  opts?: { maxEpisodes?: number; maxTokens?: number },
+  opts?: { maxEpisodes?: number; maxTokens?: number; detailLevel?: L2DetailLevel },
 ): L2Context | null {
   const maxEpisodes = opts?.maxEpisodes ?? 10;
+  const detailLevel = opts?.detailLevel ?? "full";
   const entity = engine.getEntity(entityId);
   if (!entity) return null;
 
-  // History
-  const history = engine.getEntityHistory(entity.name).map((v) => ({
-    summary: v.entity.summary,
-    validFrom: v.entity.valid_from,
-    validUntil: v.entity.valid_until,
-  }));
+  // History — skip for summary/minimal
+  const history = detailLevel === "full"
+    ? engine.getEntityHistory(entity.name).map((v) => ({
+        summary: v.entity.summary,
+        validFrom: v.entity.valid_from,
+        validUntil: v.entity.valid_until,
+      }))
+    : [];
 
-  // Edges with resolved target names
-  const allEdges = engine.findEdges({ entityId, activeOnly: true, limit: 30 });
-  const edges = allEdges.map((edge) => {
-    const isOutgoing = edge.from_id === entityId;
-    const targetEntityId = isOutgoing ? edge.to_id : edge.from_id;
-    const target = engine.getEntity(targetEntityId);
-    return {
-      direction: (isOutgoing ? "outgoing" : "incoming") as "outgoing" | "incoming",
-      relation: edge.relation,
-      targetName: target?.name ?? targetEntityId.slice(0, 8),
-      targetType: target?.type ?? "unknown",
-      weight: edge.weight,
-    };
-  });
+  // Edges — skip for minimal
+  const edges = detailLevel !== "minimal"
+    ? engine.findEdges({ entityId, activeOnly: true, limit: 30 }).map((edge) => {
+        const isOutgoing = edge.from_id === entityId;
+        const targetEntityId = isOutgoing ? edge.to_id : edge.from_id;
+        const target = engine.getEntity(targetEntityId);
+        return {
+          direction: (isOutgoing ? "outgoing" : "incoming") as "outgoing" | "incoming",
+          relation: edge.relation,
+          targetName: target?.name ?? targetEntityId.slice(0, 8),
+          targetType: target?.type ?? "unknown",
+          weight: edge.weight,
+        };
+      })
+    : [];
 
-  // Episodes that extracted this entity
-  // Query episodes that reference this entity ID
-  const episodes = findEpisodesForEntity(engine, entityId, maxEpisodes);
+  // Episodes — only for full detail
+  const episodes = detailLevel === "full"
+    ? findEpisodesForEntity(engine, entityId, maxEpisodes)
+    : [];
 
   const entitySection = {
     id: entity.id,

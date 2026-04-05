@@ -8,6 +8,8 @@ export type MemoryGraphConfig = {
   recallMaxTokens: number;
   recallMaxEntities: number;
   searchMaxResults: number;
+  /** Total token budget available from the host. When set, L0/L1/L2 budgets are derived from this. */
+  recallAvailableBudget: number;
 };
 
 const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "graph.db");
@@ -52,6 +54,10 @@ export const memoryGraphConfigSchema = {
       searchMaxResults: Math.max(
         1,
         Math.floor(toNumber(cfg.searchMaxResults, DEFAULT_SEARCH_MAX_RESULTS)),
+      ),
+      recallAvailableBudget: Math.max(
+        0,
+        Math.floor(toNumber(cfg.recallAvailableBudget, 0)),
       ),
     };
   },

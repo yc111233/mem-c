@@ -9,13 +9,14 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryGraphEngine, EntityInput } from "./graph-engine.js";
+import { consolidateGraph, type ConsolidationResult } from "./graph-consolidator.js";
 import {
   buildL1Context,
   buildL2Context,
   formatL1AsSearchContext,
   formatL2AsDetail,
+  type L2DetailLevel,
 } from "./graph-context-loader.js";
-import { searchGraph } from "./graph-search.js";
 
 // ---------------------------------------------------------------------------
 // Tool: memory_graph_search
@@ -26,6 +27,8 @@ export type MemoryGraphSearchInput = {
   types?: string[];
   maxResults?: number;
   includeRelations?: boolean;
+  /** Compact mode: omit relations from L1 output to save tokens. */
+  compact?: boolean;
 };
 
 export type MemoryGraphSearchOutput = {
@@ -47,6 +50,7 @@ export function memoryGraphSearch(
 ): MemoryGraphSearchOutput {
   const l1 = buildL1Context(db, engine, input.query, {
     maxResults: input.maxResults ?? 6,
+    compact: input.compact,
     queryEmbedding,
   });
 
@@ -57,6 +61,12 @@ export function memoryGraphSearch(
     score: r.score,
     relations: input.includeRelations !== false ? r.relations : [],
   }));
+
+  // Touch top search results to track access frequency (lightweight name lookups)
+  for (const r of l1.results.slice(0, 3)) {
+    const match = engine.findEntities({ name: r.name, activeOnly: true, limit: 1 });
+    if (match[0]) engine.touchEntity(match[0].id);
+  }
 
   return {
     results,
@@ -131,6 +141,8 @@ export type MemoryDetailInput = {
   entity: string;
   /** Entity type (helps disambiguate when searching by name) */
   type?: string;
+  /** Detail level: "full" (default), "summary" (no episodes/history), "minimal" (name+summary only) */
+  detailLevel?: L2DetailLevel;
 };
 
 export type MemoryDetailOutput = {
@@ -161,7 +173,10 @@ export function memoryDetail(
     return { found: false, formatted: `No entity found matching "${input.entity}"` };
   }
 
-  const l2 = buildL2Context(engine, entity.id);
+  // Touch entity to track access frequency
+  engine.touchEntity(entity.id);
+
+  const l2 = buildL2Context(engine, entity.id, { detailLevel: input.detailLevel });
   if (!l2) {
     return { found: false, formatted: `Entity data unavailable for "${input.entity}"` };
   }
@@ -290,4 +305,21 @@ export function memoryInvalidate(
     entityId: entity.id,
     reason: input.reason ?? "manually invalidated",
   };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_consolidate
+// ---------------------------------------------------------------------------
+
+export type MemoryConsolidateInput = {
+  dryRun?: boolean;
+};
+
+export type MemoryConsolidateOutput = ConsolidationResult;
+
+export function memoryConsolidate(
+  engine: MemoryGraphEngine,
+  input: MemoryConsolidateInput,
+): MemoryConsolidateOutput {
+  return consolidateGraph(engine, { dryRun: input.dryRun });
 }
