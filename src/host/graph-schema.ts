@@ -75,6 +75,10 @@ export function ensureGraphSchema(params: {
 }): { entityFtsAvailable: boolean; entityFtsError?: string } {
   const { db } = params;
 
+  // -- WAL mode + busy timeout (safe for multi-process concurrent access) ------
+  db.exec(`PRAGMA journal_mode = WAL`);
+  db.exec(`PRAGMA busy_timeout = 5000`);
+
   // -- entities ---------------------------------------------------------------
   db.exec(`
     CREATE TABLE IF NOT EXISTS entities (

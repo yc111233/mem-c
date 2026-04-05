@@ -19,6 +19,7 @@ Temporal knowledge graph memory system for AI agents — SQLite-based, zero-infr
 - **FTS query safety** — sanitized queries prevent crashes on special characters (v0.3+)
 - **Embedding hook** — optional `embedFn` for auto-generating embeddings (v0.3+)
 - **Entity aliases** — case-insensitive name matching with custom alias support (v0.3+)
+- **Multi-process safe** — WAL journal mode + busy_timeout for concurrent agent access (v0.3.1+)
 - **Zero infrastructure** — pure `node:sqlite` (Node 22+), no external databases
 
 ## Install
