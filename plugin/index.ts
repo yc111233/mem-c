@@ -196,10 +196,10 @@ export default {
       { name: "memory_graph_search" },
     );
 
-    // -- memory_store ---------------------------------------------------------
+    // -- memory_graph_store ----------------------------------------------------
     api.registerTool(
       (_ctx: ToolContext) => ({
-        name: "memory_store",
+        name: "memory_graph_store",
         label: "Memory Store (Graph)",
         description:
           "Store an entity in the knowledge graph. Supports upsert semantics " +
@@ -240,7 +240,7 @@ export default {
           };
         },
       }),
-      { name: "memory_store" },
+      { name: "memory_graph_store" },
     );
 
     // -- memory_detail --------------------------------------------------------

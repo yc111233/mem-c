@@ -76,7 +76,7 @@ export function memoryGraphSearch(
 }
 
 // ---------------------------------------------------------------------------
-// Tool: memory_store
+// Tool: memory_graph_store
 // ---------------------------------------------------------------------------
 
 export type MemoryStoreInput = {
