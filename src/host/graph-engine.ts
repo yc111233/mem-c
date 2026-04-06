@@ -162,8 +162,12 @@ export class MemoryGraphEngine {
       // Auto-generate embedding via hook if not provided
       let embedding = input.embedding;
       if (!embedding && this.embedFn) {
-        const text = input.name + (input.summary ? " " + input.summary : "");
-        embedding = this.embedFn(text);
+        try {
+          const text = input.name + (input.summary ? " " + input.summary : "");
+          embedding = this.embedFn(text);
+        } catch {
+          // Non-fatal: entity is stored without embedding if hook fails
+        }
       }
       const embeddingBlob = embedding ? serializeEmbedding(embedding) : null;
 
@@ -435,46 +439,48 @@ export class MemoryGraphEngine {
   // -- Edge CRUD ------------------------------------------------------------
 
   addEdge(input: EdgeInput): Edge {
-    const now = Date.now();
-    const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
-    const newWeight = input.weight ?? 1.0;
+    return this.runInTransaction(() => {
+      const now = Date.now();
+      const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
+      const newWeight = input.weight ?? 1.0;
 
-    // Dedup: check for existing active edge with same (from, to, relation)
-    const existing = this.db
-      .prepare(
-        `SELECT * FROM edges WHERE from_id = ? AND to_id = ? AND relation = ? AND valid_until IS NULL LIMIT 1`,
-      )
-      .get(input.fromId, input.toId, input.relation) as EdgeRow | undefined;
+      // Dedup: check for existing active edge with same (from, to, relation)
+      const existing = this.db
+        .prepare(
+          `SELECT * FROM edges WHERE from_id = ? AND to_id = ? AND relation = ? AND valid_until IS NULL LIMIT 1`,
+        )
+        .get(input.fromId, input.toId, input.relation) as EdgeRow | undefined;
 
-    if (existing) {
-      // Update weight (keep the higher value) and metadata
-      const updatedWeight = Math.max(existing.weight, newWeight);
+      if (existing) {
+        // Update weight (keep the higher value) and metadata
+        const updatedWeight = Math.max(existing.weight, newWeight);
+        this.db
+          .prepare(`UPDATE edges SET weight = ?, metadata = COALESCE(?, metadata) WHERE id = ?`)
+          .run(updatedWeight, metadataJson, existing.id);
+        const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(existing.id) as EdgeRow;
+        return toEdge(row);
+      }
+
+      const id = randomUUID();
       this.db
-        .prepare(`UPDATE edges SET weight = ?, metadata = COALESCE(?, metadata) WHERE id = ?`)
-        .run(updatedWeight, metadataJson, existing.id);
-      const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(existing.id) as EdgeRow;
+        .prepare(
+          `INSERT INTO edges (id, from_id, to_id, relation, weight, metadata, valid_from, valid_until, created_at) ` +
+            `VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+        )
+        .run(
+          id,
+          input.fromId,
+          input.toId,
+          input.relation,
+          newWeight,
+          metadataJson,
+          input.validFrom ?? now,
+          now,
+        );
+
+      const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(id) as EdgeRow;
       return toEdge(row);
-    }
-
-    const id = randomUUID();
-    this.db
-      .prepare(
-        `INSERT INTO edges (id, from_id, to_id, relation, weight, metadata, valid_from, valid_until, created_at) ` +
-          `VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
-      )
-      .run(
-        id,
-        input.fromId,
-        input.toId,
-        input.relation,
-        newWeight,
-        metadataJson,
-        input.validFrom ?? now,
-        now,
-      );
-
-    const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(id) as EdgeRow;
-    return toEdge(row);
+    });
   }
 
   invalidateEdge(id: string): void {

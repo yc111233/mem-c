@@ -71,7 +71,11 @@ export function searchGraph(
   if (!queryEmbedding && query.trim()) {
     const embedFn = engine.getEmbedFn();
     if (embedFn) {
-      queryEmbedding = embedFn(query);
+      try {
+        queryEmbedding = embedFn(query);
+      } catch {
+        // Non-fatal: fall back to FTS-only search
+      }
     }
   }
 

@@ -45,7 +45,7 @@
 
 | # | 特性 | 说明 |
 |---|------|------|
-| 5.1 | WAL 模式 + 并发优化 | SQLite WAL journal mode，支持并发读 |
+| ~~5.1~~ | ~~WAL 模式 + 并发优化~~ | ✅ 已在 v0.3.1 实现 (PRAGMA journal_mode=WAL + busy_timeout) |
 | 5.2 | 备份与恢复 | 增量备份 + 时间点恢复 |
 | 5.3 | 性能基准测试 | 标准化 benchmark suite，CI 中持续追踪 |
 | 5.4 | 文档站点 | 完整的 API 文档 + 教程 + 最佳实践 |
