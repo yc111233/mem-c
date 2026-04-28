@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0] - 2026-04-28
+
+### Added
+- **Community detection**: BFS-based connected components algorithm detects entity clusters. Results stored in `communities`/`community_members` tables. `detectCommunities()`, `getCommunities()`, `getCommunityForEntity()` APIs.
+- **Multi-hop path finding**: `findPaths(fromId, toId)` discovers all paths between two entities up to configurable depth via BFS with cycle detection. Returns paths sorted by length.
+- **Graph visualization export**: `exportGraph()` produces Mermaid, DOT, or JSON output. Supports full-graph and entity-centered (with depth) export. Special characters sanitized for Mermaid/DOT.
+- **New agent tools**: `memoryDetectCommunities`, `memoryFindPaths`, `memoryExportGraph`.
+
 ## [0.4.0] - 2026-04-28
 
 ### Added

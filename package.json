@@ -1,6 +1,6 @@
 {
   "name": "openclaw-memory",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Temporal knowledge graph memory system for AI agents — SQLite-based, zero-infrastructure, with hybrid retrieval (vector + FTS + graph traversal)",
   "type": "module",
   "main": "dist/index.js",
