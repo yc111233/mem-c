@@ -32,14 +32,14 @@
 | ✅ 3.4 | 关系类型推断 | LLM 辅助推断隐含关系 | Cognee (ontology-based) |
 | ✅ 3.5 | 图谱可视化导出 | 导出为 Mermaid / DOT / JSON 格式 | — |
 
-## 📋 Phase 4 (v0.6) — 生态与协议
+## ✅ Phase 4 (v0.6) — 生态与协议
 
 | # | 特性 | 说明 | 对标竞品 |
 |---|------|------|---------|
-| 4.1 | MCP Server | 实现 Model Context Protocol，支持跨 agent 共享记忆 | Mem0 (MCP server) |
-| 4.2 | 多用户隔离 | 按 user_id / namespace 隔离图谱数据 | Mem0 (user/agent/session scopes) |
-| 4.3 | 事件驱动 API | 发布 entity/edge 变更事件，支持外部订阅 | MemOS (event bus) |
-| 4.4 | REST API 层 | 可选的 HTTP 接口，用于非 Node.js 环境 | Mem0 (REST API), Letta (REST) |
+| ✅ 4.1 | MCP Server | 实现 Model Context Protocol，支持跨 agent 共享记忆 | Mem0 (MCP server) |
+| ✅ 4.2 | 多用户隔离 | 按 user_id / namespace 隔离图谱数据 | Mem0 (user/agent/session scopes) |
+| ✅ 4.3 | 事件驱动 API | 发布 entity/edge 变更事件，支持外部订阅 | MemOS (event bus) |
+| ✅ 4.4 | REST API 层 | 可选的 HTTP 接口，用于非 Node.js 环境 | Mem0 (REST API), Letta (REST) |
 
 ## 📋 Phase 5 (v1.0) — 生产就绪
 

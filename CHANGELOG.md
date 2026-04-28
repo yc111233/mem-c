@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0] - 2026-04-28
+
+### Added
+- **MCP Server**: `createMemoryMcpServer()` / `startMcpServer()` exposes all memory tools via Model Context Protocol. Supports stdio transport. Uses `@modelcontextprotocol/sdk`.
+- **Multi-user namespace isolation**: All entities, edges, and episodes support `namespace` column. `MemoryGraphEngine` accepts `namespace` option to scope all queries. Namespace-aware tools.
+- **Event-driven API**: `GraphEventEmitter` with typed events for entity/edge lifecycle (`entity:created`, `entity:updated`, `entity:invalidated`, `edge:created`, `edge:updated`, `edge:invalidated`, `communities:detected`).
+- **REST API**: `createRestServer()` / `startRestServer()` provides HTTP endpoints for search, store, detail, invalidate, communities, paths, export. Zero external dependencies (Node.js `http`).
+
 ## [0.5.1] - 2026-04-28
 
 ### Added
