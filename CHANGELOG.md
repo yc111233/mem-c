@@ -1,5 +1,55 @@
 # Changelog
 
+## [1.0.0] - 2026-04-28
+
+### Added
+- **API Reference**: Complete API documentation in `docs/api-reference.md`.
+- **Getting Started Guide**: Step-by-step guide in `docs/getting-started.md`.
+
+### Summary
+openclaw-memory v1.0.0 is the first stable release. Key capabilities:
+- Temporal knowledge graph with SQLite backend (zero infrastructure)
+- Hybrid search: vector + FTS + graph traversal + time decay
+- Document import pipeline (markdown, PDF, Feishu, chat history)
+- Multi-user namespace isolation
+- MCP Server for cross-agent memory sharing
+- Event-driven API + REST API
+- Backup & restore with incremental and point-in-time support
+- Community detection, path finding, visualization export
+- Performance benchmarks
+
+## [1.0.0-beta.3] - 2026-04-28
+
+### Added
+- **Performance benchmarks**: `npx vitest bench` runs benchmark suite covering entity CRUD, search (FTS/hybrid/cached), graph operations (neighbors, paths, communities), and batch operations at 100/200/1000 entity scales.
+
+## [1.0.0-beta.2] - 2026-04-28
+
+### Added
+- **Backup & restore**: `createBackup()` / `createIncrementalBackup()` export graph data as JSON. `restoreBackup()` imports with full restore, point-in-time recovery, and overwrite control. `writeBackup()` / `readBackup()` for file I/O.
+
+## [1.0.0-beta.1] - 2026-04-28
+
+### Added
+- **Import progress tracking**: `import_sessions` table tracks import state, chunk progress, and entity counts. `createImportSession()`, `getImportSession()`, `listImportSessions()` APIs. `importDocument()` automatically tracks progress and returns `sessionId`.
+- **Resume support**: Import sessions record `last_chunk_index` for future resume capability.
+
+## [0.7.1] - 2026-04-28
+
+### Added
+- **PDF parser factory**: `pdfParser(extractText)` — accepts a PDF-to-text callback, splits on page breaks.
+- **Feishu document parser factory**: `feishuParser(fetchContent)` — accepts a Feishu API callback, delegates to markdown parser.
+- **Batch chat import**: `batchChatImport(engine, sessions, opts)` — import multiple chat sessions in one call.
+- `DocumentParser` type is now async-compatible: `(content: string) => DocumentChunk[] | Promise<DocumentChunk[]>`.
+
+## [0.7.0] - 2026-04-28
+
+### Added
+- **Document import pipeline**: `importDocument()` — unified API for importing documents into the knowledge graph. Pipeline: parse → smart chunk → LLM extract → merge. Supports pluggable parsers.
+- **Smart chunker**: `smartChunk()` — semantic boundary-aware text splitting (paragraph > sentence > hard cut).
+- **Markdown parser**: `markdownParser()` — heading-based document chunking.
+- **Text parser**: `textParser()` — simple single-chunk parser for plain text.
+
 ## [0.6.0] - 2026-04-28
 
 ### Added

@@ -10,4 +10,8 @@ export default defineConfig({
       reporter: ["text", "lcov"],
     },
   },
+  bench: {
+    include: ["src/__tests__/benchmarks.bench.ts"],
+    reporters: ["default"],
+  },
 });

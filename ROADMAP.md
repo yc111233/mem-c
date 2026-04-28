@@ -43,12 +43,27 @@
 
 ## 📋 Phase 5 (v1.0) — 生产就绪
 
-| # | 特性 | 说明 |
-|---|------|------|
-| ~~5.1~~ | ~~WAL 模式 + 并发优化~~ | ✅ 已在 v0.3.1 实现 (PRAGMA journal_mode=WAL + busy_timeout) |
-| 5.2 | 备份与恢复 | 增量备份 + 时间点恢复 |
-| 5.3 | 性能基准测试 | 标准化 benchmark suite，CI 中持续追踪 |
-| 5.4 | 文档站点 | 完整的 API 文档 + 教程 + 最佳实践 |
+| # | 特性 | 说明 | 对标竞品 |
+|---|------|------|---------|
+| ~~5.1~~ | ~~WAL 模式 + 并发优化~~ | ✅ 已在 v0.3.1 实现 (PRAGMA journal_mode=WAL + busy_timeout) | — |
+| 5.2 | 备份与恢复 | 增量备份 + 时间点恢复 | — |
+| 5.3 | 性能基准测试 | 标准化 benchmark suite，CI 中持续追踪 | — |
+| 5.4 | 文档站点 | 完整的 API 文档 + 教程 + 最佳实践 | — |
+
+## 📋 Phase 5b (v1.1) — 知识导入管线
+
+> 目标：从任意文档源导入知识到图谱，实现"读完就记住"。
+
+| # | 特性 | 说明 | 对标竞品 |
+|---|------|------|---------|
+| 5b.1 | 通用文档导入 API | `importDocument({ source, parser, chunkSize, llmExtract })` 统一入口 | Cognee (多源导入) |
+| 5b.2 | Markdown 解析器 | 解析正文内容（非 frontmatter），支持标题层级 → 实体层级映射 | — |
+| 5b.3 | PDF 解析器 | 基于 `pdf-parse` 提取文本，支持多页文档分块 | Mem0 (document ingest) |
+| 5b.4 | 飞书文档解析器 | 通过飞书 API 拉取文档内容，转换为纯文本 | — |
+| 5b.5 | 智能分块器 | 按语义边界（段落/章节）分块，避免截断实体描述 | Cognee (semantic chunking) |
+| 5b.6 | 跨 chunk 去重 | 同一实体在不同 chunk 中被提取时自动合并（利用 upsert 幂等性） | — |
+| 5b.7 | 导入进度追踪 | `import_sessions` 表记录导入源、状态、已处理块数，支持断点续传 | — |
+| 5b.8 | 批量聊天记录导入 | 支持 JSON/文本格式的聊天记录批量提取（循环调用 extractAndMerge） | Mem0 (conversation ingest) |
 
 ---
 

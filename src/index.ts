@@ -156,6 +156,33 @@ export {
   type MigrationResult,
 } from "./host/graph-migrate.js";
 
+// Document import pipeline
+export {
+  importDocument,
+  smartChunk,
+  batchChatImport,
+  createImportSession,
+  updateImportSession,
+  getImportSession,
+  listImportSessions,
+  type DocumentChunk,
+  type DocumentParser,
+  type ImportOpts,
+  type ImportResult,
+  type ImportSession,
+  type ChatMessage,
+  type BatchImportOpts,
+  type BatchImportResult,
+} from "./host/graph-import.js";
+
+// Document parsers
+export {
+  markdownParser,
+  textParser,
+  pdfParser,
+  feishuParser,
+} from "./host/graph-parsers.js";
+
 // sqlite-vec ANN index
 export {
   ensureVecIndex,
@@ -164,6 +191,20 @@ export {
   vecKnn,
   vecSyncAll,
 } from "./host/graph-vec.js";
+
+// Backup & restore
+export {
+  createBackup,
+  createIncrementalBackup,
+  writeBackup,
+  readBackup,
+  restoreBackup,
+  type BackupData,
+  type BackupManifest,
+  type BackupResult,
+  type RestoreOpts,
+  type RestoreResult,
+} from "./host/graph-backup.js";
 
 // Event system
 export {
