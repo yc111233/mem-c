@@ -9,6 +9,7 @@ import {
   type EntityType,
   type EpisodeRow,
 } from "./graph-schema.js";
+import { vecUpsert, vecRemove } from "./graph-vec.js";
 
 // ---------------------------------------------------------------------------
 // Embedding serialization (Float32Array ↔ Buffer)
@@ -130,6 +131,16 @@ export class MemoryGraphEngine {
     return this.embedFn;
   }
 
+  private _vecAvailable = false;
+
+  setVecAvailable(available: boolean): void {
+    this._vecAvailable = available;
+  }
+
+  vecAvailable(): boolean {
+    return this._vecAvailable;
+  }
+
   // NOTE: This flag assumes single-threaded access (node:sqlite's DatabaseSync is synchronous).
   // If the engine is ever shared across concurrent async contexts, this needs a proper mutex.
   private inTransaction = false;
@@ -214,6 +225,9 @@ export class MemoryGraphEngine {
           .get(existing.id) as EntityRow;
 
         syncEntityFts(this.db, updated);
+        if (this._vecAvailable && embedding) {
+          vecUpsert(this.db, updated.id, embedding, true);
+        }
         return { ...toEntity(updated), isNew: false };
       }
 
@@ -242,6 +256,9 @@ export class MemoryGraphEngine {
 
       const row = this.db.prepare(`SELECT * FROM entities WHERE id = ?`).get(id) as EntityRow;
       syncEntityFts(this.db, row);
+      if (this._vecAvailable && embedding) {
+        vecUpsert(this.db, row.id, embedding, true);
+      }
       return { ...toEntity(row), isNew: true };
     });
   }
@@ -341,6 +358,10 @@ export class MemoryGraphEngine {
         .run(now, id, id);
 
       removeEntityFts(this.db, id);
+
+      if (this._vecAvailable) {
+        vecRemove(this.db, id, true);
+      }
 
       if (reason) {
         // Store invalidation reason in meta for audit

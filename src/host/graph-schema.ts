@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { ensureVecIndex } from "./graph-vec.js";
 
 /**
  * Entity types supported by the memory graph.
@@ -72,7 +73,7 @@ const ENTITY_FTS_TABLE = "entities_fts";
 export function ensureGraphSchema(params: {
   db: DatabaseSync;
   ftsEnabled?: boolean;
-}): { entityFtsAvailable: boolean; entityFtsError?: string } {
+}): { entityFtsAvailable: boolean; entityFtsError?: string; vecAvailable: boolean; vecError?: string } {
   const { db } = params;
 
   // -- WAL mode + busy timeout (safe for multi-process concurrent access) ------
@@ -175,6 +176,17 @@ export function ensureGraphSchema(params: {
     }
   }
 
+  // -- sqlite-vec ANN index ----------------------------------------------------
+  let vecAvailable = false;
+  let vecError: string | undefined;
+  try {
+    const vecResult = ensureVecIndex(db, 1536);
+    vecAvailable = vecResult.available;
+    vecError = vecResult.error;
+  } catch {
+    // vec not available — non-fatal
+  }
+
   // -- Embedding TEXT → BLOB migration -----------------------------------------
   try {
     const textRow = db
@@ -201,7 +213,7 @@ export function ensureGraphSchema(params: {
     // Migration is best-effort
   }
 
-  return { entityFtsAvailable, ...(entityFtsError ? { entityFtsError } : {}) };
+  return { entityFtsAvailable, ...(entityFtsError ? { entityFtsError } : {}), vecAvailable, ...(vecError ? { vecError } : {}) };
 }
 
 /** Sync an entity row into the FTS index (upsert). */

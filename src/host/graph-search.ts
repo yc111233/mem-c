@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { deserializeEmbedding, type Entity, type Edge, type MemoryGraphEngine } from "./graph-engine.js";
 import { searchEntityFts } from "./graph-schema.js";
+import { vecKnn } from "./graph-vec.js";
 
 // ---------------------------------------------------------------------------
 // Search options and result types
@@ -107,7 +108,7 @@ export function searchGraph(
 
   // Path 2: Vector similarity (if embedding provided)
   if (queryEmbedding && queryEmbedding.length > 0) {
-    const vectorHits = vectorSearchEntities(db, queryEmbedding, candidateLimit, activeOnly);
+    const vectorHits = vectorSearchEntities(db, engine, queryEmbedding, candidateLimit, activeOnly);
     for (const hit of vectorHits) {
       const existing = candidateScores.get(hit.id);
       if (existing) {
@@ -218,17 +219,40 @@ export function searchGraph(
 
 type VectorHit = { id: string; similarity: number };
 
-// TODO: integrate sqlite-vec for native ANN search to avoid full table scan
+// Full scan limit used when sqlite-vec is not available
 const VECTOR_SCAN_LIMIT = 5000;
 
 function vectorSearchEntities(
   db: DatabaseSync,
+  engine: MemoryGraphEngine,
   queryEmbedding: number[],
   limit: number,
   activeOnly: boolean,
 ): VectorHit[] {
+  // Path 1: sqlite-vec ANN index (fast path)
+  if (engine.vecAvailable()) {
+    try {
+      const knnResults = vecKnn(db, queryEmbedding, limit * 2, true);
+      if (knnResults.length > 0) {
+        const hits: VectorHit[] = [];
+        for (const r of knnResults) {
+          if (activeOnly) {
+            const entity = engine.getEntity(r.id);
+            if (!entity || entity.valid_until !== null) continue;
+          }
+          const similarity = 1 / (1 + r.distance);
+          hits.push({ id: r.id, similarity });
+        }
+        hits.sort((a, b) => b.similarity - a.similarity);
+        return hits.slice(0, limit);
+      }
+    } catch {
+      // Fall through to full scan
+    }
+  }
+
+  // Path 2: Full scan fallback (original implementation)
   try {
-    // Full scan with recency bias — most recently updated entities are searched first
     const scanLimit = Math.min(VECTOR_SCAN_LIMIT, Math.max(limit * 2, 100));
     const rows = db
       .prepare(
@@ -245,7 +269,6 @@ function vectorSearchEntities(
         if (typeof row.embedding === "string") {
           stored = JSON.parse(row.embedding) as number[];
         } else {
-          // BLOB storage — Buffer at runtime
           stored = deserializeEmbedding(row.embedding as Buffer);
         }
         const sim = cosineSimilarity(queryEmbedding, stored);
