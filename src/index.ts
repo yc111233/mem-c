@@ -30,6 +30,9 @@ export {
   type Entity,
   type Edge,
   type GraphSubset,
+  type PathStep,
+  type PathResult,
+  type FindPathsOpts,
   type EntityVersion,
 } from "./host/graph-engine.js";
 
@@ -67,6 +70,9 @@ export {
   memoryGraph,
   memoryInvalidate,
   memoryConsolidate,
+  memoryDetectCommunities,
+  memoryFindPaths,
+  memoryExportGraph,
   type MemoryGraphSearchInput,
   type MemoryGraphSearchOutput,
   type MemoryStoreInput,
@@ -81,7 +87,31 @@ export {
   type MemoryInvalidateOutput,
   type MemoryConsolidateInput,
   type MemoryConsolidateOutput,
+  type MemoryDetectCommunitiesInput,
+  type MemoryDetectCommunitiesOutput,
+  type MemoryFindPathsInput,
+  type MemoryFindPathsOutput,
+  type MemoryExportGraphInput,
+  type MemoryExportGraphOutput,
 } from "./host/graph-tools.js";
+
+// Community detection
+export {
+  detectCommunities,
+  getCommunities,
+  getCommunityForEntity,
+  type Community,
+  type DetectionResult,
+  type DetectionOpts,
+} from "./host/graph-community.js";
+
+// Graph export (Mermaid / DOT / JSON)
+export {
+  exportGraph,
+  type ExportFormat,
+  type ExportOpts as GraphExportOpts,
+  type ExportResult as GraphExportResult,
+} from "./host/graph-export.js";
 
 // Graph consolidation
 export {

@@ -10,6 +10,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryGraphEngine, EntityInput } from "./graph-engine.js";
 import { consolidateGraph, type ConsolidationResult } from "./graph-consolidator.js";
+import { detectCommunities, getCommunities, getCommunityForEntity, type Community } from "./graph-community.js";
+import { exportGraph, type ExportFormat } from "./graph-export.js";
 import {
   buildL1Context,
   buildL2Context,
@@ -398,5 +400,163 @@ export function memoryBatchStore(
     results,
     totalEntities: results.length,
     totalEdges,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_detect_communities
+// ---------------------------------------------------------------------------
+
+export type MemoryDetectCommunitiesInput = {
+  activeOnly?: boolean;
+};
+
+export type MemoryDetectCommunitiesOutput = {
+  communityCount: number;
+  totalEntities: number;
+  communities: Array<{
+    id: string;
+    entityCount: number;
+    sampleEntities: string[];
+  }>;
+};
+
+export function memoryDetectCommunities(
+  engine: MemoryGraphEngine,
+  input: MemoryDetectCommunitiesInput,
+): MemoryDetectCommunitiesOutput {
+  const result = detectCommunities(engine, { activeOnly: input.activeOnly ?? true });
+
+  return {
+    communityCount: result.communities.length,
+    totalEntities: result.totalEntities,
+    communities: result.communities.slice(0, 20).map((c) => ({
+      id: c.id,
+      entityCount: c.entityCount,
+      sampleEntities: c.entityIds
+        .slice(0, 5)
+        .map((id) => engine.getEntity(id)?.name ?? id.slice(0, 8)),
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_find_paths
+// ---------------------------------------------------------------------------
+
+export type MemoryFindPathsInput = {
+  from: string;
+  to: string;
+  maxDepth?: number;
+  maxPaths?: number;
+};
+
+export type MemoryFindPathsOutput = {
+  found: boolean;
+  paths: Array<{
+    steps: Array<{ from: string; relation: string; to: string }>;
+    length: number;
+  }>;
+  formatted: string;
+};
+
+export function memoryFindPaths(
+  engine: MemoryGraphEngine,
+  input: MemoryFindPathsInput,
+): MemoryFindPathsOutput {
+  // Resolve from/to by name or ID
+  let fromEntity = engine.getEntity(input.from);
+  if (!fromEntity) {
+    const matches = engine.findEntities({ name: input.from, activeOnly: true, limit: 1 });
+    fromEntity = matches[0] ?? null;
+  }
+  let toEntity = engine.getEntity(input.to);
+  if (!toEntity) {
+    const matches = engine.findEntities({ name: input.to, activeOnly: true, limit: 1 });
+    toEntity = matches[0] ?? null;
+  }
+
+  if (!fromEntity || !toEntity) {
+    return {
+      found: false,
+      paths: [],
+      formatted: `Entity not found: ${!fromEntity ? input.from : input.to}`,
+    };
+  }
+
+  const paths = engine.findPaths(fromEntity.id, toEntity.id, {
+    maxDepth: input.maxDepth ?? 3,
+    maxPaths: input.maxPaths ?? 5,
+  });
+
+  if (paths.length === 0) {
+    return {
+      found: false,
+      paths: [],
+      formatted: `No path found between "${fromEntity.name}" and "${toEntity.name}" within ${input.maxDepth ?? 3} hops`,
+    };
+  }
+
+  const formattedPaths = paths.map((p, i) => {
+    const chain = p.steps.map((s) => `${s.fromName} --[${s.relation}]--> ${s.toName}`).join(", ");
+    return `Path ${i + 1} (${p.length} hops): ${chain}`;
+  });
+
+  return {
+    found: true,
+    paths: paths.map((p) => ({
+      steps: p.steps.map((s) => ({
+        from: s.fromName,
+        relation: s.relation,
+        to: s.toName,
+      })),
+      length: p.length,
+    })),
+    formatted: `## Paths: ${fromEntity.name} → ${toEntity.name}\n${formattedPaths.join("\n")}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_export_graph
+// ---------------------------------------------------------------------------
+
+export type MemoryExportGraphInput = {
+  format?: ExportFormat;
+  centerEntity?: string;
+  depth?: number;
+};
+
+export type MemoryExportGraphOutput = {
+  content: string;
+  format: ExportFormat;
+  entityCount: number;
+  edgeCount: number;
+};
+
+export function memoryExportGraph(
+  engine: MemoryGraphEngine,
+  input: MemoryExportGraphInput,
+): MemoryExportGraphOutput {
+  let centerEntityId: string | undefined;
+  if (input.centerEntity) {
+    let entity = engine.getEntity(input.centerEntity);
+    if (!entity) {
+      const matches = engine.findEntities({ name: input.centerEntity, activeOnly: true, limit: 1 });
+      entity = matches[0] ?? null;
+    }
+    centerEntityId = entity?.id;
+  }
+
+  const result = exportGraph(engine, {
+    format: input.format ?? "mermaid",
+    centerEntityId,
+    depth: input.depth,
+  });
+
+  return {
+    content: result.content,
+    format: result.format,
+    entityCount: result.entityCount,
+    edgeCount: result.edgeCount,
   };
 }
