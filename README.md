@@ -1,4 +1,4 @@
-# openclaw-memory
+# MEM-C
 
 Temporal knowledge graph memory system for AI agents — SQLite-based, zero-infrastructure, with hybrid retrieval (vector + FTS + graph traversal).
 
