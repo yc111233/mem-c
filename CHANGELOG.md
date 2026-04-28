@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.0-beta.3] - 2026-04-28
+
+### Added
+- **Performance benchmarks**: `npx vitest bench` runs benchmark suite covering entity CRUD, search (FTS/hybrid/cached), graph operations (neighbors, paths, communities), and batch operations at 100/200/1000 entity scales.
+
 ## [1.0.0-beta.2] - 2026-04-28
 
 ### Added
