@@ -11,6 +11,7 @@ import {
 } from "./graph-schema.js";
 import { vecUpsert, vecRemove } from "./graph-vec.js";
 import { clearSearchCache } from "./graph-search.js";
+import { GraphEventEmitter } from "./graph-events.js";
 
 // ---------------------------------------------------------------------------
 // Embedding serialization (Float32Array ↔ Buffer)
@@ -143,6 +144,7 @@ export type EntityVersion = {
 export class MemoryGraphEngine {
   private readonly embedFn?: EmbedFn;
   private readonly namespace: string | null;
+  private readonly events = new GraphEventEmitter();
 
   constructor(private readonly db: DatabaseSync, opts?: MemoryGraphEngineOpts) {
     this.embedFn = opts?.embedFn;
@@ -157,6 +159,11 @@ export class MemoryGraphEngine {
   /** Get the configured embedding function, if any. */
   getEmbedFn(): EmbedFn | undefined {
     return this.embedFn;
+  }
+
+  /** Get the event emitter for subscribing to graph lifecycle events. */
+  getEvents(): GraphEventEmitter {
+    return this.events;
   }
 
   private _vecAvailable = false;
@@ -269,7 +276,9 @@ export class MemoryGraphEngine {
           vecUpsert(this.db, updated.id, embedding, true);
         }
         clearSearchCache();
-        return { ...toEntity(updated), isNew: false };
+        const result = { ...toEntity(updated), isNew: false };
+        this.events.emit("entity:updated", result);
+        return result;
       }
 
       // Insert new entity
@@ -303,7 +312,9 @@ export class MemoryGraphEngine {
         vecUpsert(this.db, row.id, embedding, true);
       }
       clearSearchCache();
-      return { ...toEntity(row), isNew: true };
+      const result = { ...toEntity(row), isNew: true };
+      this.events.emit("entity:created", result);
+      return result;
     });
   }
 
@@ -415,6 +426,8 @@ export class MemoryGraphEngine {
 
       removeEntityFts(this.db, id);
       clearSearchCache();
+
+      this.events.emit("entity:invalidated", id);
 
       if (this._vecAvailable) {
         vecRemove(this.db, id, true);
@@ -536,7 +549,9 @@ export class MemoryGraphEngine {
           .prepare(`UPDATE edges SET weight = ?, metadata = COALESCE(?, metadata) WHERE id = ?`)
           .run(updatedWeight, metadataJson, existing.id);
         const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(existing.id) as EdgeRow;
-        return toEdge(row);
+        const edgeResult = toEdge(row);
+        this.events.emit("edge:updated", edgeResult);
+        return edgeResult;
       }
 
       const id = randomUUID();
@@ -558,7 +573,9 @@ export class MemoryGraphEngine {
         );
 
       const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(id) as EdgeRow;
-      return toEdge(row);
+      const edgeResult = toEdge(row);
+      this.events.emit("edge:created", edgeResult);
+      return edgeResult;
     });
   }
 
