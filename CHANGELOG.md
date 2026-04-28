@@ -7,7 +7,7 @@
 - **Getting Started Guide**: Step-by-step guide in `docs/getting-started.md`.
 
 ### Summary
-openclaw-memory v1.0.0 is the first stable release. Key capabilities:
+MEM-C v1.0.0 is the first stable release. Key capabilities:
 - Temporal knowledge graph with SQLite backend (zero infrastructure)
 - Hybrid search: vector + FTS + graph traversal + time decay
 - Document import pipeline (markdown, PDF, Feishu, chat history)

@@ -1,6 +1,6 @@
 # Roadmap
 
-> 基于 GitHub Top 10 记忆系统（Mem0、Graphiti/Zep、Letta/MemGPT、Cognee、GraphRAG、LightRAG、A-Mem、MemOS、LangMem）的竞品分析，结合 openclaw-memory 的实际情况制定。
+> 基于 GitHub Top 10 记忆系统（Mem0、Graphiti/Zep、Letta/MemGPT、Cognee、GraphRAG、LightRAG、A-Mem、MemOS、LangMem）的竞品分析，结合 MEM-C 的实际情况制定。
 
 ## ✅ Phase 1 (v0.3) — 核心可靠性与数据质量
 

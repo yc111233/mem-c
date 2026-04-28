@@ -155,7 +155,7 @@ const l2 = buildL2Context(engine, entityId);
 ## LLM Extraction
 
 Extraction requires a `llmExtract` callback — the host runtime must provide this function
-(openclaw-memory does not bundle any LLM client). The OpenClaw plugin receives it via the
+(mem-c does not bundle any LLM client). The host plugin receives it via the
 `agent_end` event; standalone users must supply it directly:
 
 ```typescript

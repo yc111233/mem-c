@@ -2,3 +2,10 @@ node_modules/
 dist/
 *.tsbuildinfo
 *.log
+.DS_Store
+
+# Claude Code workspace
+CLAUDE.md
+.memsearch/
+.claude/
+docs/superpowers/
