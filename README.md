@@ -1,6 +1,6 @@
 # MEM-C
 
-Temporal knowledge graph memory system for AI agents — SQLite-based, zero-infrastructure, with hybrid retrieval (vector + FTS + graph traversal).
+Temporal knowledge graph memory for AI agents — SQLite-based, zero-infrastructure, with hybrid retrieval (vector + FTS + graph traversal), MCP Server, document import, backup/restore.
 
 **v1.0.0** | [API Reference](./docs/api-reference.md) | [Getting Started](./docs/getting-started.md) | [中文文档](./README.zh-CN.md)
 
@@ -44,7 +44,7 @@ Temporal knowledge graph memory system for AI agents — SQLite-based, zero-infr
 ## Install
 
 ```bash
-npm install openclaw-memory
+npm install mem-c
 ```
 
 ## Architecture
@@ -72,7 +72,7 @@ src/host/
 
 ```typescript
 import { DatabaseSync } from "node:sqlite";
-import { ensureGraphSchema, MemoryGraphEngine, searchGraph } from "openclaw-memory";
+import { ensureGraphSchema, MemoryGraphEngine, searchGraph } from "mem-c";
 
 // Initialize
 const db = new DatabaseSync("memory.db");
@@ -98,7 +98,7 @@ const history = engine.getEntityHistory("GraphDB"); // see all versions
 ### With Embedding Hook (v0.3+)
 
 ```typescript
-import { MemoryGraphEngine } from "openclaw-memory";
+import { MemoryGraphEngine } from "mem-c";
 
 // Provide embedding function
 const engine = new MemoryGraphEngine(db, {
@@ -143,7 +143,7 @@ const results = engine.findEntities({ name: "reactjs", type: "concept" });
 | **L2** | Full entity detail + history + episodes | ~2000 | On-demand drill-down |
 
 ```typescript
-import { buildL0Context, buildL1Context, buildL2Context, formatL0AsPromptSection } from "openclaw-memory";
+import { buildL0Context, buildL1Context, buildL2Context, formatL0AsPromptSection } from "mem-c";
 
 const l0 = buildL0Context(engine, { maxTokens: 200 });
 const systemPromptSection = formatL0AsPromptSection(l0);
@@ -155,11 +155,11 @@ const l2 = buildL2Context(engine, entityId);
 ## LLM Extraction
 
 Extraction requires a `llmExtract` callback — the host runtime must provide this function
-(openclaw-memory does not bundle any LLM client). The OpenClaw plugin receives it via the
+(mem-c does not bundle any LLM client). The host plugin receives it via the
 `agent_end` event; standalone users must supply it directly:
 
 ```typescript
-import { extractAndMerge } from "openclaw-memory";
+import { extractAndMerge } from "mem-c";
 
 const result = await extractAndMerge({
   engine,
@@ -208,7 +208,7 @@ Access tracking is automatic — search hits and detail views call `touchEntity(
 Periodic cleanup to maintain graph hygiene:
 
 ```typescript
-import { consolidateGraph } from "openclaw-memory";
+import { consolidateGraph } from "mem-c";
 
 // Dry run first
 const preview = consolidateGraph(engine, { dryRun: true });
@@ -226,7 +226,7 @@ Four phases run in a single transaction:
 ## Migration from Markdown
 
 ```typescript
-import { migrateMarkdownMemory } from "openclaw-memory";
+import { migrateMarkdownMemory } from "mem-c";
 
 const result = await migrateMarkdownMemory({
   engine,
@@ -240,7 +240,7 @@ const result = await migrateMarkdownMemory({
 Expose memory tools via Model Context Protocol for cross-agent access:
 
 ```typescript
-import { startMcpServer } from "openclaw-memory";
+import { startMcpServer } from "mem-c";
 
 // Start MCP server on stdio
 await startMcpServer({ dbPath: "./memory.db" });
@@ -252,7 +252,7 @@ await startMcpServer({ dbPath: "./memory.db" });
 Scope data per user with namespace:
 
 ```typescript
-import { MemoryGraphEngine } from "openclaw-memory";
+import { MemoryGraphEngine } from "mem-c";
 
 const user1 = new MemoryGraphEngine(db, { namespace: "user-123" });
 const user2 = new MemoryGraphEngine(db, { namespace: "user-456" });
@@ -280,7 +280,7 @@ engine.getEvents().on("edge:created", (edge) => {
 HTTP interface for non-Node.js consumers:
 
 ```typescript
-import { startRestServer } from "openclaw-memory";
+import { startRestServer } from "mem-c";
 
 const { port, close } = await startRestServer({ port: 3000 });
 // GET  /search?q=...     — hybrid search

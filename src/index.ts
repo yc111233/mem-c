@@ -1,4 +1,4 @@
-// openclaw-memory — Temporal knowledge graph memory for AI agents
+// MEM-C — Temporal knowledge graph memory for AI agents
 
 // Schema & DDL
 export {

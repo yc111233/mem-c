@@ -1,7 +1,7 @@
 /**
  * OpenClaw Memory Graph Plugin
  *
- * Knowledge graph memory backed by openclaw-memory engine.
+ * Knowledge graph memory backed by mem-c engine.
  * Provides tools (search/store/detail/graph/invalidate),
  * lifecycle hooks (auto-recall/auto-extract), and CLI commands.
  *
@@ -30,7 +30,7 @@ import {
   extractAndMerge,
   type LlmExtractFn,
   type EmbedFn,
-} from "openclaw-memory";
+} from "mem-c";
 import { memoryGraphConfigSchema } from "./config.js";
 
 // ---------------------------------------------------------------------------

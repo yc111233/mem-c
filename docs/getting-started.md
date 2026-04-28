@@ -1,9 +1,9 @@
-# Getting Started with openclaw-memory
+# Getting Started with mem-c
 
 ## Installation
 
 ```bash
-npm install openclaw-memory
+npm install mem-c
 ```
 
 **Requirements:** Node.js >= 22.0.0 (for built-in `node:sqlite`)
@@ -14,7 +14,7 @@ npm install openclaw-memory
 
 ```typescript
 import { DatabaseSync } from "node:sqlite";
-import { ensureGraphSchema, MemoryGraphEngine } from "openclaw-memory";
+import { ensureGraphSchema, MemoryGraphEngine } from "mem-c";
 
 const db = new DatabaseSync("memory.db", { allowExtension: true });
 const { entityFtsAvailable, vecAvailable } = ensureGraphSchema({ db });
@@ -66,7 +66,7 @@ engine.addEdge({
 ### 3. Search the graph
 
 ```typescript
-import { searchGraph } from "openclaw-memory";
+import { searchGraph } from "mem-c";
 
 const results = searchGraph(db, engine, "Alice's projects");
 console.log(results[0]?.entity.name);  // "Alice"
@@ -86,7 +86,7 @@ import {
   formatL0AsPromptSection,
   formatL1AsSearchContext,
   formatL2AsDetail,
-} from "openclaw-memory";
+} from "mem-c";
 
 // L0: lightweight entity roster (~200 tokens, every request)
 const l0 = buildL0Context(engine, { maxTokens: 200, useImportance: true });
@@ -104,7 +104,7 @@ const detail = formatL2AsDetail(l2);
 ### 5. Import documents
 
 ```typescript
-import { importDocument, markdownParser } from "openclaw-memory";
+import { importDocument, markdownParser } from "mem-c";
 import fs from "node:fs";
 
 const result = await importDocument(engine, {
@@ -125,7 +125,7 @@ Other built-in parsers: `textParser` (plain text), `pdfParser(extractText)` (PDF
 ### 6. Use with MCP (Claude Desktop / cross-agent)
 
 ```typescript
-import { startMcpServer } from "openclaw-memory";
+import { startMcpServer } from "mem-c";
 
 // Connects via stdio — use with Claude Desktop or any MCP client
 await startMcpServer({ dbPath: "./memory.db" });
@@ -148,14 +148,14 @@ All operations (entities, edges, episodes) are scoped to the namespace. Differen
 ### 8. Backup and restore
 
 ```typescript
-import { createBackup, writeBackup, readBackup, restoreBackup } from "openclaw-memory";
+import { createBackup, writeBackup, readBackup, restoreBackup } from "mem-c";
 
 // Full backup
 const backup = createBackup(engine);
 await writeBackup(backup, "./backup-2026-04-28.json");
 
 // Incremental backup (only changes since timestamp)
-const { createIncrementalBackup } = await import("openclaw-memory");
+const { createIncrementalBackup } = await import("mem-c");
 const incremental = createIncrementalBackup(engine, lastBackupTimestamp);
 await writeBackup(incremental, "./backup-incremental.json");
 
@@ -190,7 +190,7 @@ events.on("communities:detected", (count) => {
 ### 10. REST API for non-Node.js consumers
 
 ```typescript
-import { startRestServer } from "openclaw-memory";
+import { startRestServer } from "mem-c";
 
 const { port, close } = await startRestServer({ port: 3000 });
 console.log(`Memory API running on http://localhost:${port}`);

@@ -1,6 +1,6 @@
-# openclaw-memory API Reference
+# mem-c API Reference
 
-Complete API documentation for `openclaw-memory` v1.0.0.
+Complete API documentation for `mem-c` v1.0.0.
 
 ## Table of Contents
 
@@ -625,7 +625,7 @@ type LlmExtractFn = (params: {
 }) => Promise<string>;
 ```
 
-The caller provides this function. openclaw-memory does not bundle any LLM client.
+The caller provides this function. mem-c does not bundle any LLM client.
 
 **Returns (`ExtractAndMergeResult`):**
 

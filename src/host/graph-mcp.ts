@@ -1,5 +1,5 @@
 /**
- * MCP (Model Context Protocol) server for openclaw-memory.
+ * MCP (Model Context Protocol) server for mem-c.
  * Exposes memory graph tools as MCP tools for cross-agent access.
  */
 
@@ -41,7 +41,7 @@ export function createMemoryMcpServer(opts?: McpServerOpts): {
   ensureGraphSchema({ db, engine });
 
   const server = new McpServer({
-    name: "openclaw-memory",
+    name: "mem-c",
     version: "0.6.0",
   });
 

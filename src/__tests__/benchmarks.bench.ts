@@ -1,5 +1,5 @@
 /**
- * Performance benchmarks for openclaw-memory.
+ * Performance benchmarks for mem-c.
  * Run with: npx vitest bench
  */
 

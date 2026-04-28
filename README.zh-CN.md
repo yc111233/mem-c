@@ -1,6 +1,6 @@
 # MEM-C
 
-面向 AI 智能体的时序知识图谱记忆系统 — 基于 SQLite，零基础设施，支持混合检索（向量 + 全文 + 图遍历）。
+面向 AI 智能体的时序知识图谱记忆系统 — 基于 SQLite，零基础设施，混合检索（向量 + 全文 + 图遍历）、MCP Server、文档导入、备份恢复。
 
 [English](./README.md)
 
@@ -65,7 +65,7 @@ src/host/
 
 ```typescript
 import { DatabaseSync } from "node:sqlite";
-import { ensureGraphSchema, MemoryGraphEngine, searchGraph } from "openclaw-memory";
+import { ensureGraphSchema, MemoryGraphEngine, searchGraph } from "mem-c";
 
 // 初始化
 const db = new DatabaseSync("memory.db");
@@ -91,7 +91,7 @@ const history = engine.getEntityHistory("GraphDB"); // 查看所有版本
 ### 嵌入函数钩子 (v0.3+)
 
 ```typescript
-import { MemoryGraphEngine } from "openclaw-memory";
+import { MemoryGraphEngine } from "mem-c";
 
 // 提供嵌入函数
 const engine = new MemoryGraphEngine(db, {
@@ -136,7 +136,7 @@ const results = engine.findEntities({ name: "reactjs", type: "concept" });
 | **L2** | 完整实体详情 + 历史 + 会话片段 | ~2000 | 按需深入查看 |
 
 ```typescript
-import { buildL0Context, buildL1Context, buildL2Context, formatL0AsPromptSection } from "openclaw-memory";
+import { buildL0Context, buildL1Context, buildL2Context, formatL0AsPromptSection } from "mem-c";
 
 const l0 = buildL0Context(engine, { maxTokens: 200 });
 const systemPromptSection = formatL0AsPromptSection(l0);
@@ -148,11 +148,11 @@ const l2 = buildL2Context(engine, entityId);
 ## LLM 抽取
 
 抽取功能需要传入 `llmExtract` 回调函数 — 宿主运行时必须提供此函数
-（openclaw-memory 不内置任何 LLM 客户端）。OpenClaw 插件通过 `agent_end` 事件接收该函数；
+（mem-c 不内置任何 LLM 客户端）。宿主插件通过 `agent_end` 事件接收该函数；
 独立使用时需自行提供：
 
 ```typescript
-import { extractAndMerge } from "openclaw-memory";
+import { extractAndMerge } from "mem-c";
 
 const result = await extractAndMerge({
   engine,
@@ -195,7 +195,7 @@ const l0 = buildL0Context(engine, { maxTokens: 200, useImportance: true });
 定期清理以维护图谱卫生：
 
 ```typescript
-import { consolidateGraph } from "openclaw-memory";
+import { consolidateGraph } from "mem-c";
 
 // 先预览
 const preview = consolidateGraph(engine, { dryRun: true });
@@ -213,7 +213,7 @@ const result = consolidateGraph(engine);
 ## 从 Markdown 迁移
 
 ```typescript
-import { migrateMarkdownMemory } from "openclaw-memory";
+import { migrateMarkdownMemory } from "mem-c";
 
 const result = await migrateMarkdownMemory({
   engine,
