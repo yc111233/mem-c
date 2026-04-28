@@ -1,6 +1,6 @@
-# openclaw-memory
+# MEM-C
 
-面向 AI 智能体的时序知识图谱记忆系统 — 基于 SQLite，零基础设施，支持混合检索（向量 + 全文 + 图遍历）。
+面向 AI 智能体的时序知识图谱记忆系统 — 基于 SQLite，零基础设施，混合检索（向量 + 全文 + 图遍历）、MCP Server、文档导入、备份恢复。
 
 [English](./README.md)
 

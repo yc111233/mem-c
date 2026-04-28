@@ -1,7 +1,7 @@
 {
-  "name": "openclaw-memory",
+  "name": "mem-c",
   "version": "1.0.0",
-  "description": "Temporal knowledge graph memory system for AI agents — SQLite-based, zero-infrastructure, with hybrid retrieval (vector + FTS + graph traversal)",
+  "description": "MEM-C — Temporal knowledge graph memory for AI agents. SQLite-based, zero-infrastructure, hybrid retrieval (vector + FTS + graph traversal), MCP Server, document import, backup/restore.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
