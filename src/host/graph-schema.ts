@@ -167,6 +167,29 @@ export function ensureGraphSchema(params: {
     );
   `);
 
+  // -- communities -----------------------------------------------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS communities (
+      id TEXT PRIMARY KEY,
+      label TEXT,
+      entity_count INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_communities_updated ON communities(updated_at);`);
+
+  // -- community_members -----------------------------------------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS community_members (
+      community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+      entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      PRIMARY KEY (community_id, entity_id)
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_cm_entity ON community_members(entity_id);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_cm_community ON community_members(community_id);`);
+
   // -- entity FTS -------------------------------------------------------------
   let entityFtsAvailable = false;
   let entityFtsError: string | undefined;
