@@ -75,6 +75,8 @@ export function ensureGraphSchema(params: {
   db: DatabaseSync;
   ftsEnabled?: boolean;
   engine?: MemoryGraphEngine;
+  /** Embedding dimensions for sqlite-vec ANN index. Default 1536. */
+  vecDimensions?: number;
 }): { entityFtsAvailable: boolean; entityFtsError?: string; vecAvailable: boolean; vecError?: string } {
   const { db } = params;
 
@@ -182,7 +184,7 @@ export function ensureGraphSchema(params: {
   let vecAvailable = false;
   let vecError: string | undefined;
   try {
-    const vecResult = ensureVecIndex(db, 1536);
+    const vecResult = ensureVecIndex(db, params.vecDimensions ?? 1536);
     vecAvailable = vecResult.available;
     vecError = vecResult.error;
   } catch {
