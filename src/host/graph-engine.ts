@@ -106,6 +106,26 @@ export type GraphSubset = {
   edges: Edge[];
 };
 
+export type PathStep = {
+  fromId: string;
+  fromName: string;
+  toId: string;
+  toName: string;
+  relation: string;
+};
+
+export type PathResult = {
+  steps: PathStep[];
+  length: number;
+};
+
+export type FindPathsOpts = {
+  /** Max BFS depth. Default 3. */
+  maxDepth?: number;
+  /** Max paths to return. Default 10. */
+  maxPaths?: number;
+};
+
 export type EntityVersion = {
   entity: Entity;
   supersededBy?: string;
@@ -631,6 +651,79 @@ export class MemoryGraphEngine {
     }
 
     return { entities: resultEntities, edges: resultEdges };
+  }
+
+  /**
+   * Find all paths between two entities up to maxDepth hops.
+   * Uses BFS with path tracking. Returns paths sorted by length.
+   */
+  findPaths(
+    fromId: string,
+    toId: string,
+    opts?: FindPathsOpts,
+  ): PathResult[] {
+    const maxDepth = opts?.maxDepth ?? 3;
+    const maxPaths = opts?.maxPaths ?? 10;
+
+    if (fromId === toId) return [];
+
+    const fromEntity = this.getEntity(fromId);
+    const toEntity = this.getEntity(toId);
+    if (!fromEntity || !toEntity) return [];
+
+    const results: PathResult[] = [];
+
+    // BFS queue: each entry is [currentEntityId, pathSoFar]
+    type QueueEntry = [string, PathStep[]];
+    const queue: QueueEntry[] = [[fromId, []]];
+
+    while (queue.length > 0 && results.length < maxPaths) {
+      const [currentId, path] = queue.shift()!;
+
+      if (path.length >= maxDepth) continue;
+
+      // Get all edges touching this entity
+      const edges = this.findEdges({
+        entityId: currentId,
+        activeOnly: true,
+        limit: 100,
+      });
+
+      for (const edge of edges) {
+        const isOutgoing = edge.from_id === currentId;
+        const neighborId = isOutgoing ? edge.to_id : edge.from_id;
+
+        // Skip if this entity is already in the current path (avoid cycles)
+        const pathEntityIds = new Set([fromId, ...path.map((s) => s.toId)]);
+        if (pathEntityIds.has(neighborId)) continue;
+
+        const neighborEntity = this.getEntity(neighborId);
+        const neighborName = neighborEntity?.name ?? neighborId.slice(0, 8);
+        const fromName = path.length === 0
+          ? fromEntity.name
+          : path[path.length - 1]!.toName;
+
+        const step: PathStep = {
+          fromId: currentId,
+          fromName,
+          toId: neighborId,
+          toName: neighborName,
+          relation: edge.relation,
+        };
+
+        const newPath = [...path, step];
+
+        if (neighborId === toId) {
+          results.push({ steps: newPath, length: newPath.length });
+        } else if (newPath.length < maxDepth) {
+          queue.push([neighborId, newPath]);
+        }
+      }
+    }
+
+    // Sort by length (shortest first)
+    results.sort((a, b) => a.length - b.length);
+    return results.slice(0, maxPaths);
   }
 
   // -- Temporal queries -----------------------------------------------------
