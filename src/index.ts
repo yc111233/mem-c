@@ -192,6 +192,20 @@ export {
   vecSyncAll,
 } from "./host/graph-vec.js";
 
+// Backup & restore
+export {
+  createBackup,
+  createIncrementalBackup,
+  writeBackup,
+  readBackup,
+  restoreBackup,
+  type BackupData,
+  type BackupManifest,
+  type BackupResult,
+  type RestoreOpts,
+  type RestoreResult,
+} from "./host/graph-backup.js";
+
 // Event system
 export {
   GraphEventEmitter,

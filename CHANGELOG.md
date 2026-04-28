@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.0-beta.2] - 2026-04-28
+
+### Added
+- **Backup & restore**: `createBackup()` / `createIncrementalBackup()` export graph data as JSON. `restoreBackup()` imports with full restore, point-in-time recovery, and overwrite control. `writeBackup()` / `readBackup()` for file I/O.
+
 ## [1.0.0-beta.1] - 2026-04-28
 
 ### Added
