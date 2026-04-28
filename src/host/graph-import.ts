@@ -2,6 +2,8 @@
  * Document import pipeline: parse → chunk → extract → merge.
  */
 
+import { randomUUID } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import type { MemoryGraphEngine } from "./graph-engine.js";
 import type { LlmExtractFn } from "./graph-extractor.js";
 import { extractAndMerge } from "./graph-extractor.js";
@@ -26,15 +28,131 @@ export type ImportOpts = {
   sessionKey?: string;
   /** Max tokens per chunk (approximate, 4 chars/token). Default 2000. */
   chunkSize?: number;
+  /** Existing import session ID for resume tracking. Omit to create new. */
+  importSessionId?: string;
+  /** Source type label (e.g., "markdown", "pdf", "feishu"). */
+  sourceType?: string;
+  /** Source file path for tracking. */
+  sourcePath?: string;
 };
 
 export type ImportResult = {
+  sessionId: string;
   chunksProcessed: number;
   entitiesCreated: number;
   entitiesUpdated: number;
   edgesCreated: number;
   errors: string[];
 };
+
+// ---------------------------------------------------------------------------
+// Import Session Tracking
+// ---------------------------------------------------------------------------
+
+export type ImportSession = {
+  id: string;
+  sourceType: string;
+  sourcePath: string | null;
+  status: "pending" | "in_progress" | "completed" | "failed";
+  totalChunks: number;
+  processedChunks: number;
+  entitiesCreated: number;
+  entitiesUpdated: number;
+  edgesCreated: number;
+  errorCount: number;
+  lastChunkIndex: number;
+  createdAt: number;
+  updatedAt: number;
+  completedAt: number | null;
+};
+
+/**
+ * Create a new import session for tracking progress.
+ */
+export function createImportSession(
+  db: DatabaseSync,
+  sourceType: string,
+  sourcePath?: string,
+): ImportSession {
+  const id = randomUUID();
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO import_sessions (id, source_type, source_path, status, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?)`,
+  ).run(id, sourceType, sourcePath ?? null, now, now);
+  return getImportSession(db, id)!;
+}
+
+/**
+ * Update import session progress.
+ */
+export function updateImportSession(
+  db: DatabaseSync,
+  id: string,
+  updates: Partial<Pick<ImportSession, "status" | "totalChunks" | "processedChunks" | "entitiesCreated" | "entitiesUpdated" | "edgesCreated" | "errorCount" | "lastChunkIndex">>,
+): void {
+  const sets: string[] = ["updated_at = ?"];
+  const params: (string | number)[] = [Date.now()];
+
+  for (const [key, value] of Object.entries(updates)) {
+    const col = key.replace(/([A-Z])/g, "_$1").toLowerCase();
+    sets.push(`${col} = ?`);
+    params.push(value as number | string);
+  }
+  if (updates.status === "completed") {
+    sets.push("completed_at = ?");
+    params.push(Date.now());
+  }
+
+  params.push(id);
+  db.prepare(`UPDATE import_sessions SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+}
+
+/**
+ * Get an import session by ID.
+ */
+export function getImportSession(db: DatabaseSync, id: string): ImportSession | null {
+  const row = db.prepare(`SELECT * FROM import_sessions WHERE id = ?`).get(id) as any;
+  if (!row) return null;
+  return {
+    id: row.id,
+    sourceType: row.source_type,
+    sourcePath: row.source_path,
+    status: row.status,
+    totalChunks: row.total_chunks,
+    processedChunks: row.processed_chunks,
+    entitiesCreated: row.entities_created,
+    entitiesUpdated: row.entities_updated,
+    edgesCreated: row.edges_created,
+    errorCount: row.error_count,
+    lastChunkIndex: row.last_chunk_index,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  };
+}
+
+/**
+ * List all import sessions, newest first.
+ */
+export function listImportSessions(db: DatabaseSync): ImportSession[] {
+  const rows = db.prepare(`SELECT * FROM import_sessions ORDER BY created_at DESC`).all() as Array<any>;
+  return rows.map((row) => ({
+    id: row.id,
+    sourceType: row.source_type,
+    sourcePath: row.source_path,
+    status: row.status,
+    totalChunks: row.total_chunks,
+    processedChunks: row.processed_chunks,
+    entitiesCreated: row.entities_created,
+    entitiesUpdated: row.entities_updated,
+    edgesCreated: row.edges_created,
+    errorCount: row.error_count,
+    lastChunkIndex: row.last_chunk_index,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // Smart Chunker
@@ -108,7 +226,15 @@ export async function importDocument(
   engine: MemoryGraphEngine,
   opts: ImportOpts,
 ): Promise<ImportResult> {
+  // Create or use existing import session
+  const sessionId = opts.importSessionId ?? createImportSession(
+    engine.getDb(),
+    opts.sourceType ?? "document",
+    opts.sourcePath,
+  ).id;
+
   const result: ImportResult = {
+    sessionId,
     chunksProcessed: 0,
     entitiesCreated: 0,
     entitiesUpdated: 0,
@@ -134,7 +260,15 @@ export async function importDocument(
     }
   }
 
-  if (allChunks.length === 0) return result;
+  if (allChunks.length === 0) {
+    updateImportSession(engine.getDb(), sessionId, { status: "completed" });
+    return result;
+  }
+
+  updateImportSession(engine.getDb(), sessionId, {
+    status: "in_progress",
+    totalChunks: allChunks.length,
+  });
 
   const existingNames = engine.getActiveEntities().map((e) => e.name);
 
@@ -161,13 +295,26 @@ export async function importDocument(
       for (const err of extractResult.errors) {
         result.errors.push(`chunk ${chunk.index}: ${err}`);
       }
+
+      updateImportSession(engine.getDb(), sessionId, {
+        processedChunks: result.chunksProcessed,
+        entitiesCreated: result.entitiesCreated,
+        entitiesUpdated: result.entitiesUpdated,
+        edgesCreated: result.edgesCreated,
+        errorCount: result.errors.length,
+        lastChunkIndex: chunk.index,
+      });
     } catch (err) {
       result.errors.push(
         `chunk ${chunk.index}: ${err instanceof Error ? err.message : String(err)}`,
       );
+      updateImportSession(engine.getDb(), sessionId, {
+        errorCount: result.errors.length,
+      });
     }
   }
 
+  updateImportSession(engine.getDb(), sessionId, { status: "completed" });
   return result;
 }
 

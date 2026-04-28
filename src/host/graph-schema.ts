@@ -243,6 +243,27 @@ export function ensureGraphSchema(params: {
     params.engine.setVecAvailable(vecAvailable);
   }
 
+  // -- import sessions (progress tracking) ------------------------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS import_sessions (
+      id TEXT PRIMARY KEY,
+      source_type TEXT NOT NULL,
+      source_path TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      total_chunks INTEGER NOT NULL DEFAULT 0,
+      processed_chunks INTEGER NOT NULL DEFAULT 0,
+      entities_created INTEGER NOT NULL DEFAULT 0,
+      entities_updated INTEGER NOT NULL DEFAULT 0,
+      edges_created INTEGER NOT NULL DEFAULT 0,
+      error_count INTEGER NOT NULL DEFAULT 0,
+      last_chunk_index INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      completed_at INTEGER
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_import_sessions_status ON import_sessions(status);`);
+
   // -- Embedding TEXT → BLOB migration -----------------------------------------
   try {
     const textRow = db

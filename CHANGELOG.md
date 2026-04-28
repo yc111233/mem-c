@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-beta.1] - 2026-04-28
+
+### Added
+- **Import progress tracking**: `import_sessions` table tracks import state, chunk progress, and entity counts. `createImportSession()`, `getImportSession()`, `listImportSessions()` APIs. `importDocument()` automatically tracks progress and returns `sessionId`.
+- **Resume support**: Import sessions record `last_chunk_index` for future resume capability.
+
 ## [0.7.1] - 2026-04-28
 
 ### Added
