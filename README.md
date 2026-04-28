@@ -2,7 +2,7 @@
 
 Temporal knowledge graph memory system for AI agents — SQLite-based, zero-infrastructure, with hybrid retrieval (vector + FTS + graph traversal).
 
-[中文文档](./README.zh-CN.md)
+**v1.0.0** | [API Reference](./docs/api-reference.md) | [Getting Started](./docs/getting-started.md) | [中文文档](./README.zh-CN.md)
 
 ## Features
 

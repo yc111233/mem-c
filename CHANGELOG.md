@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0] - 2026-04-28
+
+### Added
+- **API Reference**: Complete API documentation in `docs/api-reference.md`.
+- **Getting Started Guide**: Step-by-step guide in `docs/getting-started.md`.
+
+### Summary
+openclaw-memory v1.0.0 is the first stable release. Key capabilities:
+- Temporal knowledge graph with SQLite backend (zero infrastructure)
+- Hybrid search: vector + FTS + graph traversal + time decay
+- Document import pipeline (markdown, PDF, Feishu, chat history)
+- Multi-user namespace isolation
+- MCP Server for cross-agent memory sharing
+- Event-driven API + REST API
+- Backup & restore with incremental and point-in-time support
+- Community detection, path finding, visualization export
+- Performance benchmarks
+
 ## [1.0.0-beta.3] - 2026-04-28
 
 ### Added
