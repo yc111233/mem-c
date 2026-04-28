@@ -88,12 +88,13 @@ export function searchGraph(
   try {
     const ftsResults = searchEntityFts(db, query, { limit: candidateLimit });
     if (ftsResults.length > 0) {
-      // FTS5 rank is negative; normalize relative to best hit (best = 1.0)
-      const bestRank = -ftsResults[0]!.rank; // most negative = best match
+      // FTS5 BM25 rank is negative; more negative = better match.
+      // Normalize: score = -rank / (-rank + 1) maps (-inf,0) → (0,1)
+      // Works well even with small document sets where relative normalization fails.
       for (const hit of ftsResults) {
-        const normalizedScore = bestRank > 0
-          ? Math.min(1, (-hit.rank) / bestRank)
-          : 0.5; // fallback if all ranks are 0
+        const rawRank = hit.rank; // negative
+        const normalizedScore = Math.min(1, Math.max(0, -rawRank / (-rawRank + 1)));
+
         const existing = candidateScores.get(hit.id);
         if (existing) {
           existing.fts = normalizedScore;

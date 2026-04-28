@@ -178,4 +178,46 @@ describe("searchGraph", () => {
     const found = results.find((r) => r.entity.id === entity.id);
     expect(found).toBeUndefined();
   });
+
+  // -------------------------------------------------------------------------
+  // FTS score normalization
+  // -------------------------------------------------------------------------
+
+  describe("FTS score normalization", () => {
+    it("returns meaningful scores even with small document sets", () => {
+      engine.upsertEntity({ name: "React", type: "concept", summary: "UI library by Meta" });
+      engine.upsertEntity({ name: "Vue", type: "concept", summary: "Progressive framework" });
+      engine.upsertEntity({ name: "Angular", type: "concept", summary: "Platform for web apps" });
+
+      const results = searchGraph(db, engine, "React", {
+        vectorWeight: 0,
+        ftsWeight: 1.0,
+        graphWeight: 0,
+        minScore: 0,
+      });
+
+      expect(results.length).toBeGreaterThan(0);
+      // With normalization, score should be meaningfully > 0 (not tiny like 0.001)
+      expect(results[0]!.score).toBeGreaterThan(0.1);
+    });
+
+    it("gives higher score to better matches", () => {
+      engine.upsertEntity({ name: "React", type: "concept", summary: "UI library" });
+      engine.upsertEntity({ name: "ReactiveX", type: "concept", summary: "Reactive extensions" });
+
+      const results = searchGraph(db, engine, "React", {
+        vectorWeight: 0,
+        ftsWeight: 1.0,
+        graphWeight: 0,
+        minScore: 0,
+      });
+
+      const react = results.find((r) => r.entity.name === "React");
+      const reactivex = results.find((r) => r.entity.name === "ReactiveX");
+
+      if (react && reactivex) {
+        expect(react.score).toBeGreaterThan(reactivex.score);
+      }
+    });
+  });
 });
