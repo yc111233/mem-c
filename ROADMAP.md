@@ -27,9 +27,9 @@
 | # | 特性 | 说明 | 对标竞品 |
 |---|------|------|---------|
 | ✅ 3.1 | 社区检测 | 基于图结构自动发现实体社区/集群 | GraphRAG (Leiden 算法) |
-| 3.2 | 社区摘要 | LLM 为每个社区生成摘要，用于全局搜索 | GraphRAG (community summaries) |
+| ✅ 3.2 | 社区摘要 | LLM 为每个社区生成摘要，用于全局搜索 | GraphRAG (community summaries) |
 | ✅ 3.3 | 多跳推理 | 支持多跳路径查询（A→B→C 推理链路） | Graphiti (BFS + episodic) |
-| 3.4 | 关系类型推断 | LLM 辅助推断隐含关系 | Cognee (ontology-based) |
+| ✅ 3.4 | 关系类型推断 | LLM 辅助推断隐含关系 | Cognee (ontology-based) |
 | ✅ 3.5 | 图谱可视化导出 | 导出为 Mermaid / DOT / JSON 格式 | — |
 
 ## 📋 Phase 4 (v0.6) — 生态与协议

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1] - 2026-04-28
+
+### Added
+- **Community summaries**: `summarizeCommunities()` runs an LLM callback on each detected community to generate labels. Stored in `communities.label`. Prompt template `COMMUNITY_SUMMARY_PROMPT` provided.
+- **Relation type inference**: `inferRelationTypes()` analyzes edges with generic relation types (e.g., `relates_to`) and suggests richer alternatives via LLM callback. `applySuggestions()` updates edges with inferred types and metadata.
+- **New agent tools**: `memorySummarizeCommunities`, `memoryInferRelations`.
+
 ## [0.5.0] - 2026-04-28
 
 ### Added
