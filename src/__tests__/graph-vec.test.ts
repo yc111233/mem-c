@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { DatabaseSync } from "node:sqlite";
 import { createTestDb } from "./test-helpers.js";
 import {
   ensureVecIndex,
@@ -8,6 +9,7 @@ import {
   vecSyncAll,
 } from "../host/graph-vec.js";
 import { MemoryGraphEngine } from "../host/graph-engine.js";
+import { ensureGraphSchema } from "../host/graph-schema.js";
 
 const DIMS = 4;
 
@@ -129,6 +131,41 @@ describe("graph-vec", () => {
       const db = createTestDb();
       const count = vecSyncAll(db, false);
       expect(count).toBe(0);
+    });
+  });
+
+  describe("engine integration", () => {
+    it("syncs vec on entity upsert when vec is available", () => {
+      const db = new DatabaseSync(":memory:");
+      const eng = new MemoryGraphEngine(db);
+      const schemaResult = ensureGraphSchema({ db, engine: eng });
+      if (!schemaResult.vecAvailable) return; // skip if vec not installed
+
+      eng.upsertEntity({
+        name: "Test",
+        type: "concept",
+        embedding: [1, 0, 0, 0],
+      });
+
+      const results = vecKnn(db, [1, 0, 0, 0], 1, true);
+      expect(results.length).toBe(1);
+    });
+
+    it("removes from vec on entity invalidation", () => {
+      const db = new DatabaseSync(":memory:");
+      const eng = new MemoryGraphEngine(db);
+      const schemaResult = ensureGraphSchema({ db, engine: eng });
+      if (!schemaResult.vecAvailable) return; // skip if vec not installed
+
+      const entity = eng.upsertEntity({
+        name: "Test",
+        type: "concept",
+        embedding: [1, 0, 0, 0],
+      });
+      eng.invalidateEntity(entity.id);
+
+      const results = vecKnn(db, [1, 0, 0, 0], 1, true);
+      expect(results.find((r) => r.id === entity.id)).toBeUndefined();
     });
   });
 });

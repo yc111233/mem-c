@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import { ensureVecIndex } from "./graph-vec.js";
+import type { MemoryGraphEngine } from "./graph-engine.js";
+import { ensureVecIndex, vecSyncAll } from "./graph-vec.js";
 
 /**
  * Entity types supported by the memory graph.
@@ -73,6 +74,7 @@ const ENTITY_FTS_TABLE = "entities_fts";
 export function ensureGraphSchema(params: {
   db: DatabaseSync;
   ftsEnabled?: boolean;
+  engine?: MemoryGraphEngine;
 }): { entityFtsAvailable: boolean; entityFtsError?: string; vecAvailable: boolean; vecError?: string } {
   const { db } = params;
 
@@ -185,6 +187,16 @@ export function ensureGraphSchema(params: {
     vecError = vecResult.error;
   } catch {
     // vec not available — non-fatal
+  }
+
+  // Sync existing embeddings into vec index on first init
+  if (vecAvailable) {
+    vecSyncAll(db, true);
+  }
+
+  // Wire vec availability to engine if provided
+  if (params.engine) {
+    params.engine.setVecAvailable(vecAvailable);
   }
 
   // -- Embedding TEXT → BLOB migration -----------------------------------------

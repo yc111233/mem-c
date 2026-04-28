@@ -103,3 +103,12 @@ export {
   migrateMarkdownMemory,
   type MigrationResult,
 } from "./host/graph-migrate.js";
+
+// sqlite-vec ANN index
+export {
+  ensureVecIndex,
+  vecUpsert,
+  vecRemove,
+  vecKnn,
+  vecSyncAll,
+} from "./host/graph-vec.js";
