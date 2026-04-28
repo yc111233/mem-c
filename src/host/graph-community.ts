@@ -30,6 +30,25 @@ export type DetectionOpts = {
   maxCommunitySize?: number;
 };
 
+/**
+ * Callback type for LLM community summarization.
+ * Receives entity names/types/summaries and edge relations for one community.
+ * Returns a concise label/summary for the community.
+ */
+export type SummarizeFn = (params: {
+  entities: Array<{ name: string; type: string; summary: string | null }>;
+  relations: Array<{ from: string; to: string; relation: string }>;
+}) => Promise<string>;
+
+export const COMMUNITY_SUMMARY_PROMPT = `You are analyzing a cluster of related entities in a knowledge graph. Generate a concise label (2-5 words) that describes what this community is about.
+
+Input: a list of entities with their types and summaries, and the relationships between them.
+
+Rules:
+- Return ONLY the label text, no explanation.
+- Be specific, not generic. "Frontend frameworks" is better than "Technology".
+- If there's no clear theme, use the most prominent entity name.`;
+
 // ---------------------------------------------------------------------------
 // Detection
 // ---------------------------------------------------------------------------
@@ -111,6 +130,66 @@ export function detectCommunities(
   storeCommunities(db, communities);
 
   return { communities, totalEntities: entities.length };
+}
+
+// ---------------------------------------------------------------------------
+// Summarization
+// ---------------------------------------------------------------------------
+
+/**
+ * Run an LLM summarize function on each community to generate labels.
+ * Stores results in the communities table.
+ */
+export async function summarizeCommunities(
+  engine: MemoryGraphEngine,
+  summarizeFn: SummarizeFn,
+): Promise<{ summarized: number; errors: string[] }> {
+  const communities = getCommunities(engine);
+  const db = engine.getDb();
+  const updateLabel = db.prepare(`UPDATE communities SET label = ?, updated_at = ? WHERE id = ?`);
+  const now = Date.now();
+
+  let summarized = 0;
+  const errors: string[] = [];
+
+  for (const community of communities) {
+    try {
+      const entities = community.entityIds
+        .map((id) => engine.getEntity(id))
+        .filter((e): e is NonNullable<typeof e> => e !== null)
+        .map((e) => ({ name: e.name, type: e.type, summary: e.summary }));
+
+      const memberSet = new Set(community.entityIds);
+      const relations: Array<{ from: string; to: string; relation: string }> = [];
+      const seenEdges = new Set<string>();
+
+      for (const entityId of community.entityIds) {
+        const edges = engine.findEdges({ entityId, activeOnly: true, limit: 50 });
+        for (const edge of edges) {
+          if (memberSet.has(edge.from_id) && memberSet.has(edge.to_id) && !seenEdges.has(edge.id)) {
+            seenEdges.add(edge.id);
+            const fromEntity = engine.getEntity(edge.from_id);
+            const toEntity = engine.getEntity(edge.to_id);
+            relations.push({
+              from: fromEntity?.name ?? edge.from_id.slice(0, 8),
+              to: toEntity?.name ?? edge.to_id.slice(0, 8),
+              relation: edge.relation,
+            });
+          }
+        }
+      }
+
+      const label = await summarizeFn({ entities, relations });
+      updateLabel.run(label, now, community.id);
+      summarized++;
+    } catch (err) {
+      errors.push(
+        `community ${community.id.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  return { summarized, errors };
 }
 
 // ---------------------------------------------------------------------------

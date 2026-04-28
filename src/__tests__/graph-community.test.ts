@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MemoryGraphEngine } from "../host/graph-engine.js";
-import { detectCommunities, getCommunities, getCommunityForEntity } from "../host/graph-community.js";
+import { detectCommunities, getCommunities, getCommunityForEntity, summarizeCommunities, type SummarizeFn } from "../host/graph-community.js";
 import { createTestDb } from "./test-helpers.js";
 
 describe("community detection", () => {
@@ -103,6 +103,67 @@ describe("community detection", () => {
     it("returns null for entity not in any community", () => {
       const community = getCommunityForEntity(engine, "nonexistent");
       expect(community).toBeNull();
+    });
+  });
+
+  describe("summarizeCommunities", () => {
+    it("calls summarizeFn for each community and stores label", async () => {
+      const a = engine.upsertEntity({ name: "React", type: "concept", summary: "UI library" });
+      const b = engine.upsertEntity({ name: "Vue", type: "concept", summary: "Progressive framework" });
+      engine.addEdge({ fromId: a.id, toId: b.id, relation: "relates" });
+
+      detectCommunities(engine);
+
+      const mockSummarize = async () => "Frontend frameworks";
+      const result = await summarizeCommunities(engine, mockSummarize);
+
+      expect(result.summarized).toBe(1);
+
+      const communities = getCommunities(engine);
+      expect(communities[0]!.label).toBe("Frontend frameworks");
+    });
+
+    it("handles multiple communities", async () => {
+      const a = engine.upsertEntity({ name: "A", type: "concept" });
+      const b = engine.upsertEntity({ name: "B", type: "concept" });
+      engine.addEdge({ fromId: a.id, toId: b.id, relation: "relates" });
+
+      const c = engine.upsertEntity({ name: "C", type: "concept" });
+      const d = engine.upsertEntity({ name: "D", type: "concept" });
+      engine.addEdge({ fromId: c.id, toId: d.id, relation: "relates" });
+
+      detectCommunities(engine);
+
+      let callCount = 0;
+      const mockSummarize = async () => {
+        callCount++;
+        return `Summary ${callCount}`;
+      };
+
+      const result = await summarizeCommunities(engine, mockSummarize);
+      expect(result.summarized).toBe(2);
+    });
+
+    it("skips summarizeFn errors gracefully", async () => {
+      const a = engine.upsertEntity({ name: "A", type: "concept" });
+      const b = engine.upsertEntity({ name: "B", type: "concept" });
+      engine.addEdge({ fromId: a.id, toId: b.id, relation: "relates" });
+
+      detectCommunities(engine);
+
+      const mockSummarize = async () => {
+        throw new Error("LLM unavailable");
+      };
+
+      const result = await summarizeCommunities(engine, mockSummarize);
+      expect(result.summarized).toBe(0);
+      expect(result.errors.length).toBe(1);
+    });
+
+    it("returns 0 when no communities exist", async () => {
+      const mockSummarize = async () => "test";
+      const result = await summarizeCommunities(engine, mockSummarize);
+      expect(result.summarized).toBe(0);
     });
   });
 });
