@@ -1,4 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join, dirname } from "node:path";
 
 /**
  * Inline deserialization of BLOB embeddings (Float32Array ↔ Buffer).
@@ -10,7 +13,37 @@ function deserializeEmbeddingInline(blob: Buffer): number[] {
 }
 
 /**
+ * Find the sqlite-vec extension dylib/so path from node_modules.
+ * Returns null if not installed.
+ */
+function findVecExtensionPath(): string | null {
+  const platform = process.platform;
+  const arch = process.arch;
+  const osName = platform === "win32" ? "windows" : platform;
+  const suffix = platform === "win32" ? "dll" : platform === "darwin" ? "dylib" : "so";
+  const pkgName = `sqlite-vec-${osName}-${arch}`;
+  const fileName = `vec0.${suffix}`;
+
+  // Try to resolve from node_modules
+  try {
+    const require = createRequire(join(process.cwd(), "noop.js"));
+    const pkgDir = dirname(require.resolve(`${pkgName}/package.json`));
+    const fullPath = join(pkgDir, fileName);
+    if (existsSync(fullPath)) return fullPath;
+  } catch {
+    // Package not installed
+  }
+
+  // Fallback: check common paths
+  const candidate = join(process.cwd(), "node_modules", pkgName, fileName);
+  if (existsSync(candidate)) return candidate;
+
+  return null;
+}
+
+/**
  * Ensure the sqlite-vec virtual table exists for ANN indexing.
+ * Loads the sqlite-vec extension if available, then creates the vec0 table.
  * Returns availability status — non-fatal if vec0 extension is missing.
  */
 export function ensureVecIndex(
@@ -18,6 +51,18 @@ export function ensureVecIndex(
   dimensions: number,
 ): { available: boolean; error?: string } {
   try {
+    // Try to load sqlite-vec extension
+    const extPath = findVecExtensionPath();
+    if (extPath) {
+      // Enable extension loading (requires allowExtension: true at DB creation)
+      try {
+        (db as any).enableLoadExtension(true);
+        (db as any).loadExtension(extPath);
+      } catch {
+        // Extension loading may be disabled — try without (vec0 may already be loaded)
+      }
+    }
+
     db.exec(
       `CREATE VIRTUAL TABLE IF NOT EXISTS entities_vec USING vec0(id TEXT, embedding FLOAT[${dimensions}])`,
     );
@@ -40,7 +85,7 @@ export function vecUpsert(
   if (!available) return;
   try {
     db.prepare(
-      `INSERT OR REPLACE INTO entities_vec (id, embedding) VALUES (?, vec(?))`,
+      `INSERT OR REPLACE INTO entities_vec (id, embedding) VALUES (?, vec_f32(?))`,
     ).run(entityId, JSON.stringify(embedding));
   } catch {
     // Non-fatal: vec index is best-effort
@@ -77,7 +122,7 @@ export function vecKnn(
   try {
     const rows = db
       .prepare(
-        `SELECT id, distance FROM entities_vec WHERE embedding MATCH vec(?) ORDER BY distance LIMIT k`,
+        `SELECT id, distance FROM entities_vec WHERE embedding MATCH vec_f32(?) ORDER BY distance LIMIT ?`,
       )
       .all(JSON.stringify(queryEmbedding), k) as Array<{ id: string; distance: number }>;
     return rows;
@@ -99,7 +144,7 @@ export function vecSyncAll(db: DatabaseSync, available: boolean): number {
       .all() as Array<{ id: string; embedding: Buffer }>;
 
     const stmt = db.prepare(
-      `INSERT OR REPLACE INTO entities_vec (id, embedding) VALUES (?, vec(?))`,
+      `INSERT OR REPLACE INTO entities_vec (id, embedding) VALUES (?, vec_f32(?))`,
     );
 
     for (const row of rows) {

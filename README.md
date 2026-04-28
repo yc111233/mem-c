@@ -6,21 +6,40 @@ Temporal knowledge graph memory system for AI agents — SQLite-based, zero-infr
 
 ## Features
 
+**Core**
 - **Temporal versioning** — `valid_from` / `valid_until` on entities and edges; track when facts change
 - **Hybrid search** — vector similarity + FTS5 full-text + graph connectivity + time decay scoring
 - **Tiered context loading** — L0 (entity roster, ~200 tokens) / L1 (search results, ~800 tokens) / L2 (full detail, ~2000 tokens)
-- **Entity importance scoring** — composite metric (recency + degree centrality + access frequency + confidence) for smarter L0 injection
+- **Entity importance scoring** — composite metric (recency + degree centrality + access frequency + confidence)
 - **Graph consolidation** — automatic merge of duplicates, decay of stale entities, pruning of low-confidence orphans
-- **Compaction-aware** — pre-compaction extraction hooks and post-compaction L0 boost to prevent knowledge loss
 - **LLM extraction** — automatic entity/relation extraction from conversation transcripts
-- **Markdown migration** — import existing MEMORY.md / memory/*.md files into the graph
-- **Edge deduplication** — automatic merge of duplicate edges with weight updates (v0.3+)
-- **Binary embedding storage** — BLOB storage for 60% space reduction vs JSON (v0.3+)
-- **FTS query safety** — sanitized queries prevent crashes on special characters (v0.3+)
-- **Embedding hook** — optional `embedFn` for auto-generating embeddings (v0.3+)
-- **Entity aliases** — case-insensitive name matching with custom alias support (v0.3+)
-- **Multi-process safe** — WAL journal mode + busy_timeout for concurrent agent access (v0.3.1+)
 - **Zero infrastructure** — pure `node:sqlite` (Node 22+), no external databases
+
+**Performance (v0.4+)**
+- **sqlite-vec ANN index** — optional approximate nearest neighbor search, graceful fallback to full scan
+- **Incremental embeddings** — `embedFn` only called when content changes (tracked via `content_hash`)
+- **Batch operations** — `upsertEntities()` / `addEdges()` for multi-item transactions
+- **FTS score normalization** — meaningful scores even with small document sets
+- **Search result cache** — LRU cache (128 entries, 30s TTL), auto-invalidation on writes
+
+**Graph Intelligence (v0.5+)**
+- **Community detection** — BFS connected components, stored in `communities`/`community_members` tables
+- **Multi-hop path finding** — BFS with cycle discovery between any two entities
+- **Graph visualization export** — Mermaid, DOT, JSON formats
+- **Community summaries** — LLM-generated labels for each community cluster
+- **Relation type inference** — LLM suggests richer relation types for generic edges
+
+**Ecosystem (v0.6+)**
+- **MCP Server** — Model Context Protocol for cross-agent memory sharing (9 tools)
+- **Multi-user isolation** — namespace-based scoping for entities, edges, and episodes
+- **Event-driven API** — typed `GraphEventEmitter` with 7 lifecycle events
+- **REST API** — HTTP endpoints for non-Node.js consumers (8 routes, zero deps)
+
+**Safety**
+- **Edge deduplication** — automatic merge of duplicate edges with weight updates
+- **Binary embedding storage** — BLOB storage for 60% space reduction vs JSON
+- **FTS query safety** — sanitized queries prevent crashes on special characters
+- **Multi-process safe** — WAL journal mode + busy_timeout for concurrent access
 
 ## Install
 
@@ -32,14 +51,21 @@ npm install openclaw-memory
 
 ```
 src/host/
-├── graph-schema.ts         # SQLite DDL + FTS5 virtual table
-├── graph-engine.ts         # CRUD + graph traversal + temporal versioning + importance scoring
-├── graph-search.ts         # Hybrid retrieval (vector + FTS + graph + time decay)
-├── graph-context-loader.ts # L0/L1/L2 tiered context loading (query-aware, importance-aware)
+├── graph-schema.ts         # SQLite DDL + FTS5 virtual table + vec0 ANN index
+├── graph-engine.ts         # CRUD + graph traversal + temporal versioning + namespace isolation
+├── graph-search.ts         # Hybrid retrieval (vector + FTS + graph + time decay + cache)
+├── graph-context-loader.ts # L0/L1/L2 tiered context loading
 ├── graph-consolidator.ts   # Graph hygiene: merge duplicates, decay stale, prune orphans
 ├── graph-extractor.ts      # LLM entity/relation extraction
 ├── graph-migrate.ts        # Markdown memory → graph migration
-└── graph-tools.ts          # Agent tool interfaces
+├── graph-tools.ts          # Agent tool interfaces
+├── graph-vec.ts            # sqlite-vec ANN adapter
+├── graph-community.ts      # Community detection + LLM summaries
+├── graph-inference.ts      # Relation type inference
+├── graph-export.ts         # Mermaid/DOT/JSON visualization export
+├── graph-events.ts         # Typed EventEmitter for lifecycle events
+├── graph-mcp.ts            # MCP server for cross-agent sharing
+└── graph-rest.ts           # REST API (HTTP)
 ```
 
 ## Quick Start
@@ -149,7 +175,7 @@ const result = await extractAndMerge({
 
 ## Agent Tools
 
-Six pre-built tool functions for agent integration:
+Pre-built tool functions for agent integration:
 
 | Tool | Function | Purpose |
 |------|----------|---------|
@@ -159,6 +185,12 @@ Six pre-built tool functions for agent integration:
 | `memoryGraph` | Graph visualization | Show entity relationships |
 | `memoryInvalidate` | Soft delete | Mark facts as outdated |
 | `memoryConsolidate` | Graph hygiene | Merge duplicates, decay stale, prune orphans |
+| `memoryBatchStore` | Batch create | Store multiple entities in one transaction |
+| `memoryDetectCommunities` | Community detection | Find entity clusters |
+| `memoryFindPaths` | Path finding | Multi-hop reasoning between entities |
+| `memoryExportGraph` | Graph export | Mermaid/DOT/JSON visualization |
+| `memorySummarizeCommunities` | Community labels | LLM-generated cluster summaries |
+| `memoryInferRelations` | Relation inference | Suggest richer relation types |
 
 ## Importance Scoring
 
@@ -201,6 +233,63 @@ const result = await migrateMarkdownMemory({
   workspaceDir: "/path/to/workspace",
 });
 // Imports memory/*.md files with frontmatter into the graph
+```
+
+## MCP Server (v0.6+)
+
+Expose memory tools via Model Context Protocol for cross-agent access:
+
+```typescript
+import { startMcpServer } from "openclaw-memory";
+
+// Start MCP server on stdio
+await startMcpServer({ dbPath: "./memory.db" });
+// 9 tools available: memory_search, memory_store, memory_detail, etc.
+```
+
+## Multi-User Namespace Isolation (v0.6+)
+
+Scope data per user with namespace:
+
+```typescript
+import { MemoryGraphEngine } from "openclaw-memory";
+
+const user1 = new MemoryGraphEngine(db, { namespace: "user-123" });
+const user2 = new MemoryGraphEngine(db, { namespace: "user-456" });
+
+user1.upsertEntity({ name: "Private", type: "concept" });
+user2.findEntities({ name: "Private" }); // → [] (isolated)
+```
+
+## Event-Driven API (v0.6+)
+
+Subscribe to graph mutations:
+
+```typescript
+const engine = new MemoryGraphEngine(db);
+engine.getEvents().on("entity:created", (entity) => {
+  console.log("New entity:", entity.name);
+});
+engine.getEvents().on("edge:created", (edge) => {
+  console.log("New edge:", edge.relation);
+});
+```
+
+## REST API (v0.6+)
+
+HTTP interface for non-Node.js consumers:
+
+```typescript
+import { startRestServer } from "openclaw-memory";
+
+const { port, close } = await startRestServer({ port: 3000 });
+// GET  /search?q=...     — hybrid search
+// POST /entities         — create entity
+// GET  /entities/:name   — entity detail
+// GET  /communities      — detect communities
+// GET  /paths?from=X&to=Y — path finding
+// GET  /export?format=mermaid — graph export
+// GET  /health           — server stats
 ```
 
 ## OpenViking Synergy

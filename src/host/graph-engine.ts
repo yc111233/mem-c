@@ -11,6 +11,7 @@ import {
 } from "./graph-schema.js";
 import { vecUpsert, vecRemove } from "./graph-vec.js";
 import { clearSearchCache } from "./graph-search.js";
+import { GraphEventEmitter } from "./graph-events.js";
 
 // ---------------------------------------------------------------------------
 // Embedding serialization (Float32Array ↔ Buffer)
@@ -126,6 +127,11 @@ export type FindPathsOpts = {
   maxPaths?: number;
 };
 
+export type MemoryGraphEngineOpts = {
+  embedFn?: EmbedFn;
+  namespace?: string;
+};
+
 export type EntityVersion = {
   entity: Entity;
   supersededBy?: string;
@@ -137,9 +143,12 @@ export type EntityVersion = {
 
 export class MemoryGraphEngine {
   private readonly embedFn?: EmbedFn;
+  private readonly namespace: string | null;
+  private readonly events = new GraphEventEmitter();
 
-  constructor(private readonly db: DatabaseSync, opts?: { embedFn?: EmbedFn }) {
+  constructor(private readonly db: DatabaseSync, opts?: MemoryGraphEngineOpts) {
     this.embedFn = opts?.embedFn;
+    this.namespace = opts?.namespace ?? null;
   }
 
   /** Expose the underlying database for advanced queries (e.g. episode lookups). */
@@ -150,6 +159,11 @@ export class MemoryGraphEngine {
   /** Get the configured embedding function, if any. */
   getEmbedFn(): EmbedFn | undefined {
     return this.embedFn;
+  }
+
+  /** Get the event emitter for subscribing to graph lifecycle events. */
+  getEvents(): GraphEventEmitter {
+    return this.events;
   }
 
   private _vecAvailable = false;
@@ -197,8 +211,8 @@ export class MemoryGraphEngine {
       if (!embedding && this.embedFn) {
         // Only re-embed if content actually changed
         const existingHash = this.db
-          .prepare(`SELECT content_hash FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL LIMIT 1`)
-          .get(input.name, input.type) as { content_hash: string | null } | undefined;
+          .prepare(`SELECT content_hash FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL AND (namespace = ? OR (namespace IS NULL AND ? IS NULL)) LIMIT 1`)
+          .get(input.name, input.type, this.namespace, this.namespace) as { content_hash: string | null } | undefined;
         const shouldReembed = !existingHash || existingHash.content_hash !== newHash;
         if (shouldReembed) {
           try {
@@ -214,12 +228,12 @@ export class MemoryGraphEngine {
       }
       const embeddingBlob = embedding ? serializeEmbedding(embedding) : null;
 
-      // Try to find existing active entity with same name+type
+      // Try to find existing active entity with same name+type (scoped by namespace)
       let existing = this.db
         .prepare(
-          `SELECT * FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL LIMIT 1`,
+          `SELECT * FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL AND (namespace = ? OR (namespace IS NULL AND ? IS NULL)) LIMIT 1`,
         )
-        .get(input.name, input.type) as EntityRow | undefined;
+        .get(input.name, input.type, this.namespace, this.namespace) as EntityRow | undefined;
 
       // Fallback: try normalized alias lookup (join with entities to filter by type)
       if (!existing) {
@@ -228,9 +242,9 @@ export class MemoryGraphEngine {
           .prepare(
             `SELECT e.* FROM entity_aliases a ` +
               `JOIN entities e ON e.id = a.entity_id ` +
-              `WHERE a.alias = ? AND e.type = ? AND e.valid_until IS NULL LIMIT 1`,
+              `WHERE a.alias = ? AND e.type = ? AND e.valid_until IS NULL AND (e.namespace = ? OR (e.namespace IS NULL AND ? IS NULL)) LIMIT 1`,
           )
-          .get(normalized, input.type) as EntityRow | undefined;
+          .get(normalized, input.type, this.namespace, this.namespace) as EntityRow | undefined;
       }
 
       if (existing) {
@@ -262,15 +276,17 @@ export class MemoryGraphEngine {
           vecUpsert(this.db, updated.id, embedding, true);
         }
         clearSearchCache();
-        return { ...toEntity(updated), isNew: false };
+        const result = { ...toEntity(updated), isNew: false };
+        this.events.emit("entity:updated", result);
+        return result;
       }
 
       // Insert new entity
       const id = randomUUID();
       this.db
         .prepare(
-          `INSERT INTO entities (id, name, type, summary, embedding, confidence, source, valid_from, valid_until, created_at, updated_at, content_hash) ` +
-            `VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+          `INSERT INTO entities (id, name, type, summary, embedding, confidence, source, valid_from, valid_until, created_at, updated_at, content_hash, namespace) ` +
+            `VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -284,6 +300,7 @@ export class MemoryGraphEngine {
           now,
           now,
           newHash,
+          this.namespace,
         );
 
       // Register normalized alias
@@ -295,14 +312,16 @@ export class MemoryGraphEngine {
         vecUpsert(this.db, row.id, embedding, true);
       }
       clearSearchCache();
-      return { ...toEntity(row), isNew: true };
+      const result = { ...toEntity(row), isNew: true };
+      this.events.emit("entity:created", result);
+      return result;
     });
   }
 
   getEntity(id: string): Entity | null {
-    const row = this.db.prepare(`SELECT * FROM entities WHERE id = ?`).get(id) as
-      | EntityRow
-      | undefined;
+    const row = this.db
+      .prepare(`SELECT * FROM entities WHERE id = ? AND (namespace = ? OR (namespace IS NULL AND ? IS NULL))`)
+      .get(id, this.namespace, this.namespace) as EntityRow | undefined;
     return row ? toEntity(row) : null;
   }
 
@@ -321,6 +340,12 @@ export class MemoryGraphEngine {
     }
     if (activeOnly) {
       conditions.push(`valid_until IS NULL`);
+    }
+    if (this.namespace !== null) {
+      conditions.push(`(namespace = ? OR namespace IS NULL)`);
+      params.push(this.namespace);
+    } else {
+      conditions.push(`namespace IS NULL`);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -346,6 +371,12 @@ export class MemoryGraphEngine {
         }
         if (activeOnly) {
           aliasConds.push(`valid_until IS NULL`);
+        }
+        if (this.namespace !== null) {
+          aliasConds.push(`(namespace = ? OR namespace IS NULL)`);
+          aliasParams.push(this.namespace);
+        } else {
+          aliasConds.push(`namespace IS NULL`);
         }
         const aliasWhere = `WHERE ${aliasConds.join(" AND ")}`;
         const aliasEntities = this.db
@@ -395,6 +426,8 @@ export class MemoryGraphEngine {
 
       removeEntityFts(this.db, id);
       clearSearchCache();
+
+      this.events.emit("entity:invalidated", id);
 
       if (this._vecAvailable) {
         vecRemove(this.db, id, true);
@@ -502,12 +535,12 @@ export class MemoryGraphEngine {
       const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
       const newWeight = input.weight ?? 1.0;
 
-      // Dedup: check for existing active edge with same (from, to, relation)
+      // Dedup: check for existing active edge with same (from, to, relation) in same namespace
       const existing = this.db
         .prepare(
-          `SELECT * FROM edges WHERE from_id = ? AND to_id = ? AND relation = ? AND valid_until IS NULL LIMIT 1`,
+          `SELECT * FROM edges WHERE from_id = ? AND to_id = ? AND relation = ? AND valid_until IS NULL AND (namespace = ? OR (namespace IS NULL AND ? IS NULL)) LIMIT 1`,
         )
-        .get(input.fromId, input.toId, input.relation) as EdgeRow | undefined;
+        .get(input.fromId, input.toId, input.relation, this.namespace, this.namespace) as EdgeRow | undefined;
 
       if (existing) {
         // Update weight (keep the higher value) and metadata
@@ -516,14 +549,16 @@ export class MemoryGraphEngine {
           .prepare(`UPDATE edges SET weight = ?, metadata = COALESCE(?, metadata) WHERE id = ?`)
           .run(updatedWeight, metadataJson, existing.id);
         const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(existing.id) as EdgeRow;
-        return toEdge(row);
+        const edgeResult = toEdge(row);
+        this.events.emit("edge:updated", edgeResult);
+        return edgeResult;
       }
 
       const id = randomUUID();
       this.db
         .prepare(
-          `INSERT INTO edges (id, from_id, to_id, relation, weight, metadata, valid_from, valid_until, created_at) ` +
-            `VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+          `INSERT INTO edges (id, from_id, to_id, relation, weight, metadata, valid_from, valid_until, created_at, namespace) ` +
+            `VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
         )
         .run(
           id,
@@ -534,10 +569,13 @@ export class MemoryGraphEngine {
           metadataJson,
           input.validFrom ?? now,
           now,
+          this.namespace,
         );
 
       const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(id) as EdgeRow;
-      return toEdge(row);
+      const edgeResult = toEdge(row);
+      this.events.emit("edge:created", edgeResult);
+      return edgeResult;
     });
   }
 
@@ -582,6 +620,12 @@ export class MemoryGraphEngine {
     }
     if (activeOnly) {
       conditions.push(`valid_until IS NULL`);
+    }
+    if (this.namespace !== null) {
+      conditions.push(`(namespace = ? OR namespace IS NULL)`);
+      params.push(this.namespace);
+    } else {
+      conditions.push(`namespace IS NULL`);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -756,10 +800,10 @@ export class MemoryGraphEngine {
 
     this.db
       .prepare(
-        `INSERT INTO episodes (id, session_key, turn_index, content, extracted_entity_ids, timestamp) ` +
-          `VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO episodes (id, session_key, turn_index, content, extracted_entity_ids, timestamp, namespace) ` +
+          `VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, input.sessionKey, input.turnIndex ?? null, input.content, extractedIds, now);
+      .run(id, input.sessionKey, input.turnIndex ?? null, input.content, extractedIds, now, this.namespace);
 
     return this.db.prepare(`SELECT * FROM episodes WHERE id = ?`).get(id) as EpisodeRow;
   }

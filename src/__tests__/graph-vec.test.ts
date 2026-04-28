@@ -11,7 +11,14 @@ import {
 import { MemoryGraphEngine } from "../host/graph-engine.js";
 import { ensureGraphSchema } from "../host/graph-schema.js";
 
-const DIMS = 4;
+const DIMS = 1536; // Must match ensureGraphSchema default vecDimensions
+
+/** Create a sparse embedding with 1.0 at the given index, 0 elsewhere. */
+function sparseVec(index: number): number[] {
+  const vec = new Array(DIMS).fill(0);
+  vec[index] = 1.0;
+  return vec;
+}
 
 describe("graph-vec", () => {
   describe("ensureVecIndex", () => {
@@ -31,36 +38,18 @@ describe("graph-vec", () => {
 
       const engine = new MemoryGraphEngine(db);
 
-      // Insert entities with embeddings
-      const e1 = engine.upsertEntity({
-        name: "alpha",
-        type: "concept",
-        embedding: [1, 0, 0, 0],
-      });
-      const e2 = engine.upsertEntity({
-        name: "beta",
-        type: "concept",
-        embedding: [0, 1, 0, 0],
-      });
-      const e3 = engine.upsertEntity({
-        name: "gamma",
-        type: "concept",
-        embedding: [0, 0, 1, 0],
-      });
+      const e1 = engine.upsertEntity({ name: "alpha", type: "concept", embedding: sparseVec(0) });
+      const e2 = engine.upsertEntity({ name: "beta", type: "concept", embedding: sparseVec(1) });
+      const e3 = engine.upsertEntity({ name: "gamma", type: "concept", embedding: sparseVec(2) });
 
-      // Upsert into vec index
-      vecUpsert(db, e1.id, [1, 0, 0, 0], true);
-      vecUpsert(db, e2.id, [0, 1, 0, 0], true);
-      vecUpsert(db, e3.id, [0, 0, 1, 0], true);
+      vecUpsert(db, e1.id, sparseVec(0), true);
+      vecUpsert(db, e2.id, sparseVec(1), true);
+      vecUpsert(db, e3.id, sparseVec(2), true);
 
-      // Query nearest to [1, 0, 0, 0] — alpha should be closest
-      const results = vecKnn(db, [1, 0, 0, 0], 3, true);
+      const results = vecKnn(db, sparseVec(0), 3, true);
       expect(results.length).toBeGreaterThan(0);
-
-      // First result should be alpha (distance 0 or near-0)
       expect(results[0]!.id).toBe(e1.id);
 
-      // Results should be sorted by distance ascending
       for (let i = 1; i < results.length; i++) {
         expect(results[i]!.distance).toBeGreaterThanOrEqual(results[i - 1]!.distance);
       }
@@ -68,7 +57,7 @@ describe("graph-vec", () => {
 
     it("returns empty array when available=false", () => {
       const db = createTestDb();
-      const results = vecKnn(db, [1, 0, 0, 0], 5, false);
+      const results = vecKnn(db, sparseVec(0), 5, false);
       expect(results).toEqual([]);
     });
   });
@@ -80,23 +69,15 @@ describe("graph-vec", () => {
       if (!available) return;
 
       const engine = new MemoryGraphEngine(db);
-      const entity = engine.upsertEntity({
-        name: "to-remove",
-        type: "concept",
-        embedding: [1, 0, 0, 0],
-      });
+      const entity = engine.upsertEntity({ name: "to-remove", type: "concept", embedding: sparseVec(0) });
+      vecUpsert(db, entity.id, sparseVec(0), true);
 
-      vecUpsert(db, entity.id, [1, 0, 0, 0], true);
-
-      // Confirm it's in the index
-      let results = vecKnn(db, [1, 0, 0, 0], 5, true);
+      let results = vecKnn(db, sparseVec(0), 5, true);
       expect(results.some((r) => r.id === entity.id)).toBe(true);
 
-      // Remove it
       vecRemove(db, entity.id, true);
 
-      // Confirm it's gone
-      results = vecKnn(db, [1, 0, 0, 0], 5, true);
+      results = vecKnn(db, sparseVec(0), 5, true);
       expect(results.some((r) => r.id === entity.id)).toBe(false);
     });
   });
@@ -108,22 +89,13 @@ describe("graph-vec", () => {
       if (!available) return;
 
       const engine = new MemoryGraphEngine(db);
-      engine.upsertEntity({
-        name: "sync-a",
-        type: "concept",
-        embedding: [1, 0, 0, 0],
-      });
-      engine.upsertEntity({
-        name: "sync-b",
-        type: "concept",
-        embedding: [0, 1, 0, 0],
-      });
+      engine.upsertEntity({ name: "sync-a", type: "concept", embedding: sparseVec(0) });
+      engine.upsertEntity({ name: "sync-b", type: "concept", embedding: sparseVec(1) });
 
       const count = vecSyncAll(db, true);
       expect(count).toBe(2);
 
-      // Verify they're queryable
-      const results = vecKnn(db, [1, 0, 0, 0], 5, true);
+      const results = vecKnn(db, sparseVec(0), 5, true);
       expect(results.length).toBe(2);
     });
 
@@ -136,35 +108,27 @@ describe("graph-vec", () => {
 
   describe("engine integration", () => {
     it("syncs vec on entity upsert when vec is available", () => {
-      const db = new DatabaseSync(":memory:");
+      const db = new DatabaseSync(":memory:", { allowExtension: true });
       const eng = new MemoryGraphEngine(db);
       const schemaResult = ensureGraphSchema({ db, engine: eng });
-      if (!schemaResult.vecAvailable) return; // skip if vec not installed
+      if (!schemaResult.vecAvailable) return;
 
-      eng.upsertEntity({
-        name: "Test",
-        type: "concept",
-        embedding: [1, 0, 0, 0],
-      });
+      eng.upsertEntity({ name: "Test", type: "concept", embedding: sparseVec(0) });
 
-      const results = vecKnn(db, [1, 0, 0, 0], 1, true);
+      const results = vecKnn(db, sparseVec(0), 1, true);
       expect(results.length).toBe(1);
     });
 
     it("removes from vec on entity invalidation", () => {
-      const db = new DatabaseSync(":memory:");
+      const db = new DatabaseSync(":memory:", { allowExtension: true });
       const eng = new MemoryGraphEngine(db);
       const schemaResult = ensureGraphSchema({ db, engine: eng });
-      if (!schemaResult.vecAvailable) return; // skip if vec not installed
+      if (!schemaResult.vecAvailable) return;
 
-      const entity = eng.upsertEntity({
-        name: "Test",
-        type: "concept",
-        embedding: [1, 0, 0, 0],
-      });
+      const entity = eng.upsertEntity({ name: "Test", type: "concept", embedding: sparseVec(0) });
       eng.invalidateEntity(entity.id);
 
-      const results = vecKnn(db, [1, 0, 0, 0], 1, true);
+      const results = vecKnn(db, sparseVec(0), 1, true);
       expect(results.find((r) => r.id === entity.id)).toBeUndefined();
     });
   });

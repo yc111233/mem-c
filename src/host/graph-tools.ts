@@ -33,6 +33,7 @@ export type MemoryGraphSearchInput = {
   includeRelations?: boolean;
   /** Compact mode: omit relations from L1 output to save tokens. */
   compact?: boolean;
+  namespace?: string;
 };
 
 export type MemoryGraphSearchOutput = {
@@ -90,6 +91,7 @@ export type MemoryStoreInput = {
   confidence?: number;
   /** Optional relations to create: [{target, relation}] */
   relations?: Array<{ targetName: string; targetType: string; relation: string }>;
+  namespace?: string;
 };
 
 export type MemoryStoreOutput = {

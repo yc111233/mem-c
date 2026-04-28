@@ -6,33 +6,59 @@
 
 ## 特性
 
+**核心**
 - **时序版本管理** — 实体和边使用 `valid_from` / `valid_until` 标记，追踪事实的变化历程
 - **混合检索** — 向量相似度 + FTS5 全文搜索 + 图连通性 + 时间衰减评分
-- **分层上下文加载** — L0（实体名册，~200 tokens）/ L1（搜索结果，~800 tokens）/ L2（完整详情，~2000 tokens）
-- **实体重要性评分** — 综合指标（时效性 + 连接度 + 访问频率 + 置信度）实现更智能的 L0 注入
-- **图谱整合** — 自动合并重复实体、衰减过时实体、清理低置信孤立实体
-- **压缩感知** — 压缩前提取钩子 + 压缩后 L0 增强，防止知识丢失
+- **分层上下文加载** — L0（实体名册）/ L1（搜索结果）/ L2（完整详情）
+- **图谱整合** — 自动合并重复、衰减过时、清理孤立实体
 - **LLM 自动抽取** — 从对话文本中自动提取实体和关系
-- **边去重** — 自动合并重复边并更新权重（v0.3+）
-- **二进制嵌入存储** — BLOB 存储，相比 JSON 节省约 60% 空间（v0.3+）
-- **FTS 查询安全** — 自动清理特殊字符，防止 FTS5 查询崩溃（v0.3+）
-- **嵌入函数钩子** — 可选 `embedFn` 自动生成嵌入向量（v0.3+）
-- **实体别名** — 大小写不敏感匹配 + 自定义别名支持（v0.3+）
-- **多进程安全** — WAL 日志模式 + busy_timeout，支持多 agent 并发访问（v0.3.1+）
 - **零基础设施** — 纯 `node:sqlite`（Node 22+），无需外部数据库
+
+**性能优化（v0.4+）**
+- **sqlite-vec ANN 索引** — 可选近似最近邻搜索，优雅降级到全表扫描
+- **增量嵌入** — 内容不变时跳过 `embedFn`（通过 `content_hash` 追踪）
+- **批量操作** — `upsertEntities()` / `addEdges()` 单事务批量写入
+- **FTS 评分归一化** — 小数据集也能返回有意义的分数
+- **搜索缓存** — LRU 缓存（128 条，30s TTL），写入自动失效
+
+**图谱智能（v0.5+）**
+- **社区检测** — BFS 连通分量算法，存储到 `communities` 表
+- **多跳路径查找** — BFS + 环路发现，任意两实体间路径
+- **可视化导出** — Mermaid / DOT / JSON 格式
+- **社区摘要** — LLM 为每个社区集群生成标签
+- **关系类型推断** — LLM 为泛型关系建议更丰富的类型
+
+**生态系统（v0.6+）**
+- **MCP Server** — Model Context Protocol，跨 agent 共享记忆（9 个工具）
+- **多用户隔离** — 基于 namespace 的实体/边/事件隔离
+- **事件驱动 API** — 类型安全的 `GraphEventEmitter`，7 种生命周期事件
+- **REST API** — HTTP 接口，供非 Node.js 环境使用（8 个端点，零依赖）
+
+**安全**
+- **边去重** — 自动合并重复边并更新权重
+- **二进制嵌入存储** — BLOB 存储，节省约 60% 空间
+- **FTS 查询安全** — 防止特殊字符导致崩溃
+- **多进程安全** — WAL 日志模式 + busy_timeout
 
 ## 架构
 
 ```
 src/host/
-├── graph-schema.ts         # SQLite DDL + FTS5 虚拟表
-├── graph-engine.ts         # CRUD + 图遍历 + 时序版本管理 + 重要性评分
-├── graph-search.ts         # 混合检索（向量 + FTS + 图 + 时间衰减）
-├── graph-context-loader.ts # L0/L1/L2 分层上下文加载（查询感知、重要性感知）
-├── graph-consolidator.ts   # 图谱卫生：合并重复、衰减过时、清理孤立
+├── graph-schema.ts         # SQLite DDL + FTS5 + vec0 ANN 索引
+├── graph-engine.ts         # CRUD + 图遍历 + 时序版本 + 命名空间隔离
+├── graph-search.ts         # 混合检索（向量 + FTS + 图 + 时间衰减 + 缓存）
+├── graph-context-loader.ts # L0/L1/L2 分层上下文加载
+├── graph-consolidator.ts   # 图谱卫生：合并、衰减、清理
 ├── graph-extractor.ts      # LLM 实体/关系抽取
 ├── graph-migrate.ts        # Markdown 记忆 → 图谱迁移
-└── graph-tools.ts          # 智能体工具接口
+├── graph-tools.ts          # 智能体工具接口
+├── graph-vec.ts            # sqlite-vec ANN 适配器
+├── graph-community.ts      # 社区检测 + LLM 摘要
+├── graph-inference.ts      # 关系类型推断
+├── graph-export.ts         # Mermaid/DOT/JSON 可视化导出
+├── graph-events.ts         # 类型安全的生命周期事件
+├── graph-mcp.ts            # MCP Server（跨 agent 共享）
+└── graph-rest.ts           # REST API（HTTP）
 ```
 
 ## 快速开始

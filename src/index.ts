@@ -34,6 +34,7 @@ export {
   type PathResult,
   type FindPathsOpts,
   type EntityVersion,
+  type MemoryGraphEngineOpts,
 } from "./host/graph-engine.js";
 
 // Hybrid search (vector + FTS + graph)
@@ -163,3 +164,23 @@ export {
   vecKnn,
   vecSyncAll,
 } from "./host/graph-vec.js";
+
+// Event system
+export {
+  GraphEventEmitter,
+  type GraphEvents,
+} from "./host/graph-events.js";
+
+// MCP server
+export {
+  createMemoryMcpServer,
+  startMcpServer,
+  type McpServerOpts,
+} from "./host/graph-mcp.js";
+
+// REST API
+export {
+  createRestServer,
+  startRestServer,
+  type RestServerOpts,
+} from "./host/graph-rest.js";
