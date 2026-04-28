@@ -595,3 +595,103 @@ describe("incremental embedding", () => {
     expect(callCount).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Namespace isolation
+// ---------------------------------------------------------------------------
+
+describe("namespace isolation", () => {
+  let db: DatabaseSync;
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("scopes entities to namespace", () => {
+    const ns1 = new MemoryGraphEngine(db, { namespace: "user1" });
+    const ns2 = new MemoryGraphEngine(db, { namespace: "user2" });
+
+    ns1.upsertEntity({ name: "A", type: "concept" });
+    ns2.upsertEntity({ name: "B", type: "concept" });
+
+    const user1Entities = ns1.findEntities({});
+    const user2Entities = ns2.findEntities({});
+
+    expect(user1Entities.length).toBe(1);
+    expect(user1Entities[0]!.name).toBe("A");
+    expect(user2Entities.length).toBe(1);
+    expect(user2Entities[0]!.name).toBe("B");
+  });
+
+  it("default namespace (null) only sees non-namespaced data", () => {
+    const defaultEngine = new MemoryGraphEngine(db);
+    const nsEngine = new MemoryGraphEngine(db, { namespace: "user1" });
+
+    defaultEngine.upsertEntity({ name: "Global", type: "concept" });
+    nsEngine.upsertEntity({ name: "Private", type: "concept" });
+
+    const defaultEntities = defaultEngine.findEntities({});
+    expect(defaultEntities.length).toBe(1);
+    expect(defaultEntities[0]!.name).toBe("Global");
+  });
+
+  it("namespaced engine does not see other namespace data", () => {
+    const ns1 = new MemoryGraphEngine(db, { namespace: "user1" });
+    const ns2 = new MemoryGraphEngine(db, { namespace: "user2" });
+
+    ns1.upsertEntity({ name: "Secret", type: "concept" });
+
+    const found = ns2.findEntities({ name: "Secret" });
+    expect(found.length).toBe(0);
+  });
+
+  it("scopes edges to namespace", () => {
+    const ns1 = new MemoryGraphEngine(db, { namespace: "user1" });
+    const ns2 = new MemoryGraphEngine(db, { namespace: "user2" });
+
+    const a = ns1.upsertEntity({ name: "A", type: "concept" });
+    const b = ns1.upsertEntity({ name: "B", type: "concept" });
+    ns1.addEdge({ fromId: a.id, toId: b.id, relation: "relates" });
+
+    // ns2 should not see ns1's edges
+    const edges = ns2.findEdges({});
+    expect(edges.length).toBe(0);
+  });
+
+  it("getEntity scopes by namespace", () => {
+    const ns1 = new MemoryGraphEngine(db, { namespace: "user1" });
+    const ns2 = new MemoryGraphEngine(db, { namespace: "user2" });
+
+    const entity = ns1.upsertEntity({ name: "X", type: "concept" });
+
+    // ns1 can get it
+    expect(ns1.getEntity(entity.id)).not.toBeNull();
+
+    // ns2 cannot get it
+    expect(ns2.getEntity(entity.id)).toBeNull();
+  });
+
+  it("upsert in same namespace updates existing entity", () => {
+    const ns1 = new MemoryGraphEngine(db, { namespace: "user1" });
+
+    const first = ns1.upsertEntity({ name: "A", type: "concept", summary: "v1" });
+    const second = ns1.upsertEntity({ name: "A", type: "concept", summary: "v2" });
+
+    expect(second.id).toBe(first.id);
+    expect(second.summary).toBe("v2");
+  });
+
+  it("upsert in different namespace creates separate entity", () => {
+    const ns1 = new MemoryGraphEngine(db, { namespace: "user1" });
+    const ns2 = new MemoryGraphEngine(db, { namespace: "user2" });
+
+    const e1 = ns1.upsertEntity({ name: "A", type: "concept" });
+    const e2 = ns2.upsertEntity({ name: "A", type: "concept" });
+
+    expect(e1.id).not.toBe(e2.id);
+  });
+});

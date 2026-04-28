@@ -34,6 +34,7 @@ export {
   type PathResult,
   type FindPathsOpts,
   type EntityVersion,
+  type MemoryGraphEngineOpts,
 } from "./host/graph-engine.js";
 
 // Hybrid search (vector + FTS + graph)

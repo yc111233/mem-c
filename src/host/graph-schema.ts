@@ -39,6 +39,7 @@ export type EntityRow = {
   access_count: number;
   last_accessed_at: number;
   content_hash: string | null;
+  namespace: string | null;
 };
 
 export type EdgeRow = {
@@ -51,6 +52,7 @@ export type EdgeRow = {
   valid_from: number;
   valid_until: number | null;
   created_at: number;
+  namespace: string | null;
 };
 
 export type EpisodeRow = {
@@ -60,6 +62,7 @@ export type EpisodeRow = {
   content: string;
   extracted_entity_ids: string | null;
   timestamp: number;
+  namespace: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -115,6 +118,10 @@ export function ensureGraphSchema(params: {
   // Content hash for incremental embedding
   try { db.exec(`ALTER TABLE entities ADD COLUMN content_hash TEXT`); } catch { /* already exists */ }
 
+  // Namespace for multi-user isolation (entities)
+  try { db.exec(`ALTER TABLE entities ADD COLUMN namespace TEXT`); } catch { /* already exists */ }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_entities_ns ON entities(namespace);`);
+
   // -- edges ------------------------------------------------------------------
   db.exec(`
     CREATE TABLE IF NOT EXISTS edges (
@@ -134,6 +141,10 @@ export function ensureGraphSchema(params: {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_edges_dedup ON edges(from_id, to_id, relation);`);
 
+  // Namespace for multi-user isolation (edges)
+  try { db.exec(`ALTER TABLE edges ADD COLUMN namespace TEXT`); } catch { /* already exists */ }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_edges_ns ON edges(namespace);`);
+
   // -- episodes ---------------------------------------------------------------
   db.exec(`
     CREATE TABLE IF NOT EXISTS episodes (
@@ -147,6 +158,10 @@ export function ensureGraphSchema(params: {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_episodes_session ON episodes(session_key);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_episodes_ts ON episodes(timestamp);`);
+
+  // Namespace for multi-user isolation (episodes)
+  try { db.exec(`ALTER TABLE episodes ADD COLUMN namespace TEXT`); } catch { /* already exists */ }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_episodes_ns ON episodes(namespace);`);
 
   // -- entity_aliases ----------------------------------------------------------
   db.exec(`
