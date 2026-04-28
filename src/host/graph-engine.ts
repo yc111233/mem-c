@@ -517,6 +517,16 @@ export class MemoryGraphEngine {
     });
   }
 
+  /** Batch upsert multiple entities in a single transaction. */
+  upsertEntities(inputs: EntityInput[]): Array<Entity & { isNew: boolean }> {
+    return this.runInTransaction(() => inputs.map((input) => this.upsertEntity(input)));
+  }
+
+  /** Batch create multiple edges in a single transaction. */
+  addEdges(inputs: EdgeInput[]): Edge[] {
+    return this.runInTransaction(() => inputs.map((input) => this.addEdge(input)));
+  }
+
   invalidateEdge(id: string): void {
     const now = Date.now();
     this.db

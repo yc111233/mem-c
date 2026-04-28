@@ -324,3 +324,79 @@ export function memoryConsolidate(
 ): MemoryConsolidateOutput {
   return consolidateGraph(engine, { dryRun: input.dryRun });
 }
+
+// ---------------------------------------------------------------------------
+// Tool: memory_batch_store
+// ---------------------------------------------------------------------------
+
+export type MemoryBatchStoreInput = {
+  entities: Array<{
+    name: string;
+    type: string;
+    summary?: string;
+    confidence?: number;
+    relations?: Array<{ targetName: string; targetType: string; relation: string }>;
+  }>;
+};
+
+export type MemoryBatchStoreOutput = {
+  results: Array<{
+    entityId: string;
+    name: string;
+    isNew: boolean;
+    edgesCreated: number;
+  }>;
+  totalEntities: number;
+  totalEdges: number;
+};
+
+export function memoryBatchStore(
+  engine: MemoryGraphEngine,
+  input: MemoryBatchStoreInput,
+): MemoryBatchStoreOutput {
+  const results: MemoryBatchStoreOutput["results"] = [];
+  let totalEdges = 0;
+
+  engine.runInTransaction(() => {
+    for (const item of input.entities) {
+      const entity = engine.upsertEntity({
+        name: item.name,
+        type: item.type,
+        summary: item.summary,
+        confidence: item.confidence,
+        source: "manual",
+      });
+
+      let edgesCreated = 0;
+      if (item.relations) {
+        for (const rel of item.relations) {
+          const target = engine.upsertEntity({
+            name: rel.targetName,
+            type: rel.targetType,
+            source: "manual",
+          });
+          engine.addEdge({
+            fromId: entity.id,
+            toId: target.id,
+            relation: rel.relation,
+          });
+          edgesCreated++;
+        }
+      }
+
+      results.push({
+        entityId: entity.id,
+        name: entity.name,
+        isNew: entity.isNew,
+        edgesCreated,
+      });
+      totalEdges += edgesCreated;
+    }
+  });
+
+  return {
+    results,
+    totalEntities: results.length,
+    totalEdges,
+  };
+}

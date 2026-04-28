@@ -61,6 +61,7 @@ export {
 export {
   memoryGraphSearch,
   memoryStore,
+  memoryBatchStore,
   memoryDetail,
   memoryGraph,
   memoryInvalidate,
@@ -69,6 +70,8 @@ export {
   type MemoryGraphSearchOutput,
   type MemoryStoreInput,
   type MemoryStoreOutput,
+  type MemoryBatchStoreInput,
+  type MemoryBatchStoreOutput,
   type MemoryDetailInput,
   type MemoryDetailOutput,
   type MemoryGraphInput,
