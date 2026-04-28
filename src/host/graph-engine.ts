@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
   removeEntityFts,
@@ -9,6 +9,8 @@ import {
   type EntityType,
   type EpisodeRow,
 } from "./graph-schema.js";
+import { vecUpsert, vecRemove } from "./graph-vec.js";
+import { clearSearchCache } from "./graph-search.js";
 
 // ---------------------------------------------------------------------------
 // Embedding serialization (Float32Array ↔ Buffer)
@@ -104,6 +106,26 @@ export type GraphSubset = {
   edges: Edge[];
 };
 
+export type PathStep = {
+  fromId: string;
+  fromName: string;
+  toId: string;
+  toName: string;
+  relation: string;
+};
+
+export type PathResult = {
+  steps: PathStep[];
+  length: number;
+};
+
+export type FindPathsOpts = {
+  /** Max BFS depth. Default 3. */
+  maxDepth?: number;
+  /** Max paths to return. Default 10. */
+  maxPaths?: number;
+};
+
 export type EntityVersion = {
   entity: Entity;
   supersededBy?: string;
@@ -128,6 +150,16 @@ export class MemoryGraphEngine {
   /** Get the configured embedding function, if any. */
   getEmbedFn(): EmbedFn | undefined {
     return this.embedFn;
+  }
+
+  private _vecAvailable = false;
+
+  setVecAvailable(available: boolean): void {
+    this._vecAvailable = available;
+  }
+
+  vecAvailable(): boolean {
+    return this._vecAvailable;
   }
 
   // NOTE: This flag assumes single-threaded access (node:sqlite's DatabaseSync is synchronous).
@@ -160,10 +192,25 @@ export class MemoryGraphEngine {
       const now = Date.now();
 
       // Auto-generate embedding via hook if not provided
+      const newHash = computeContentHash(input.name, input.summary);
       let embedding = input.embedding;
       if (!embedding && this.embedFn) {
-        const text = input.name + (input.summary ? " " + input.summary : "");
-        embedding = this.embedFn(text);
+        // Only re-embed if content actually changed
+        const existingHash = this.db
+          .prepare(`SELECT content_hash FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL LIMIT 1`)
+          .get(input.name, input.type) as { content_hash: string | null } | undefined;
+        const shouldReembed = !existingHash || existingHash.content_hash !== newHash;
+        if (shouldReembed) {
+          try {
+            const text = input.name + (input.summary ? " " + input.summary : "");
+            embedding = this.embedFn(text);
+          } catch {
+            // Non-fatal
+          }
+        } else {
+          // Content unchanged — keep existing embedding, skip embedFn
+          embedding = undefined;
+        }
       }
       const embeddingBlob = embedding ? serializeEmbedding(embedding) : null;
 
@@ -191,7 +238,7 @@ export class MemoryGraphEngine {
         this.db
           .prepare(
             `UPDATE entities SET summary = COALESCE(?, summary), embedding = COALESCE(?, embedding), ` +
-              `confidence = ?, source = ?, updated_at = ? WHERE id = ?`,
+              `confidence = ?, source = ?, updated_at = ?, content_hash = ? WHERE id = ?`,
           )
           .run(
             input.summary ?? null,
@@ -199,6 +246,7 @@ export class MemoryGraphEngine {
             input.confidence ?? existing.confidence,
             input.source ?? existing.source,
             now,
+            newHash,
             existing.id,
           );
 
@@ -210,6 +258,10 @@ export class MemoryGraphEngine {
           .get(existing.id) as EntityRow;
 
         syncEntityFts(this.db, updated);
+        if (this._vecAvailable && embedding) {
+          vecUpsert(this.db, updated.id, embedding, true);
+        }
+        clearSearchCache();
         return { ...toEntity(updated), isNew: false };
       }
 
@@ -217,8 +269,8 @@ export class MemoryGraphEngine {
       const id = randomUUID();
       this.db
         .prepare(
-          `INSERT INTO entities (id, name, type, summary, embedding, confidence, source, valid_from, valid_until, created_at, updated_at) ` +
-            `VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+          `INSERT INTO entities (id, name, type, summary, embedding, confidence, source, valid_from, valid_until, created_at, updated_at, content_hash) ` +
+            `VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
         )
         .run(
           id,
@@ -231,6 +283,7 @@ export class MemoryGraphEngine {
           input.validFrom ?? now,
           now,
           now,
+          newHash,
         );
 
       // Register normalized alias
@@ -238,6 +291,10 @@ export class MemoryGraphEngine {
 
       const row = this.db.prepare(`SELECT * FROM entities WHERE id = ?`).get(id) as EntityRow;
       syncEntityFts(this.db, row);
+      if (this._vecAvailable && embedding) {
+        vecUpsert(this.db, row.id, embedding, true);
+      }
+      clearSearchCache();
       return { ...toEntity(row), isNew: true };
     });
   }
@@ -337,6 +394,11 @@ export class MemoryGraphEngine {
         .run(now, id, id);
 
       removeEntityFts(this.db, id);
+      clearSearchCache();
+
+      if (this._vecAvailable) {
+        vecRemove(this.db, id, true);
+      }
 
       if (reason) {
         // Store invalidation reason in meta for audit
@@ -435,46 +497,58 @@ export class MemoryGraphEngine {
   // -- Edge CRUD ------------------------------------------------------------
 
   addEdge(input: EdgeInput): Edge {
-    const now = Date.now();
-    const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
-    const newWeight = input.weight ?? 1.0;
+    return this.runInTransaction(() => {
+      const now = Date.now();
+      const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
+      const newWeight = input.weight ?? 1.0;
 
-    // Dedup: check for existing active edge with same (from, to, relation)
-    const existing = this.db
-      .prepare(
-        `SELECT * FROM edges WHERE from_id = ? AND to_id = ? AND relation = ? AND valid_until IS NULL LIMIT 1`,
-      )
-      .get(input.fromId, input.toId, input.relation) as EdgeRow | undefined;
+      // Dedup: check for existing active edge with same (from, to, relation)
+      const existing = this.db
+        .prepare(
+          `SELECT * FROM edges WHERE from_id = ? AND to_id = ? AND relation = ? AND valid_until IS NULL LIMIT 1`,
+        )
+        .get(input.fromId, input.toId, input.relation) as EdgeRow | undefined;
 
-    if (existing) {
-      // Update weight (keep the higher value) and metadata
-      const updatedWeight = Math.max(existing.weight, newWeight);
+      if (existing) {
+        // Update weight (keep the higher value) and metadata
+        const updatedWeight = Math.max(existing.weight, newWeight);
+        this.db
+          .prepare(`UPDATE edges SET weight = ?, metadata = COALESCE(?, metadata) WHERE id = ?`)
+          .run(updatedWeight, metadataJson, existing.id);
+        const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(existing.id) as EdgeRow;
+        return toEdge(row);
+      }
+
+      const id = randomUUID();
       this.db
-        .prepare(`UPDATE edges SET weight = ?, metadata = COALESCE(?, metadata) WHERE id = ?`)
-        .run(updatedWeight, metadataJson, existing.id);
-      const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(existing.id) as EdgeRow;
+        .prepare(
+          `INSERT INTO edges (id, from_id, to_id, relation, weight, metadata, valid_from, valid_until, created_at) ` +
+            `VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+        )
+        .run(
+          id,
+          input.fromId,
+          input.toId,
+          input.relation,
+          newWeight,
+          metadataJson,
+          input.validFrom ?? now,
+          now,
+        );
+
+      const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(id) as EdgeRow;
       return toEdge(row);
-    }
+    });
+  }
 
-    const id = randomUUID();
-    this.db
-      .prepare(
-        `INSERT INTO edges (id, from_id, to_id, relation, weight, metadata, valid_from, valid_until, created_at) ` +
-          `VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
-      )
-      .run(
-        id,
-        input.fromId,
-        input.toId,
-        input.relation,
-        newWeight,
-        metadataJson,
-        input.validFrom ?? now,
-        now,
-      );
+  /** Batch upsert multiple entities in a single transaction. */
+  upsertEntities(inputs: EntityInput[]): Array<Entity & { isNew: boolean }> {
+    return this.runInTransaction(() => inputs.map((input) => this.upsertEntity(input)));
+  }
 
-    const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(id) as EdgeRow;
-    return toEdge(row);
+  /** Batch create multiple edges in a single transaction. */
+  addEdges(inputs: EdgeInput[]): Edge[] {
+    return this.runInTransaction(() => inputs.map((input) => this.addEdge(input)));
   }
 
   invalidateEdge(id: string): void {
@@ -579,6 +653,79 @@ export class MemoryGraphEngine {
     return { entities: resultEntities, edges: resultEdges };
   }
 
+  /**
+   * Find all paths between two entities up to maxDepth hops.
+   * Uses BFS with path tracking. Returns paths sorted by length.
+   */
+  findPaths(
+    fromId: string,
+    toId: string,
+    opts?: FindPathsOpts,
+  ): PathResult[] {
+    const maxDepth = opts?.maxDepth ?? 3;
+    const maxPaths = opts?.maxPaths ?? 10;
+
+    if (fromId === toId) return [];
+
+    const fromEntity = this.getEntity(fromId);
+    const toEntity = this.getEntity(toId);
+    if (!fromEntity || !toEntity) return [];
+
+    const results: PathResult[] = [];
+
+    // BFS queue: each entry is [currentEntityId, pathSoFar]
+    type QueueEntry = [string, PathStep[]];
+    const queue: QueueEntry[] = [[fromId, []]];
+
+    while (queue.length > 0 && results.length < maxPaths) {
+      const [currentId, path] = queue.shift()!;
+
+      if (path.length >= maxDepth) continue;
+
+      // Get all edges touching this entity
+      const edges = this.findEdges({
+        entityId: currentId,
+        activeOnly: true,
+        limit: 100,
+      });
+
+      for (const edge of edges) {
+        const isOutgoing = edge.from_id === currentId;
+        const neighborId = isOutgoing ? edge.to_id : edge.from_id;
+
+        // Skip if this entity is already in the current path (avoid cycles)
+        const pathEntityIds = new Set([fromId, ...path.map((s) => s.toId)]);
+        if (pathEntityIds.has(neighborId)) continue;
+
+        const neighborEntity = this.getEntity(neighborId);
+        const neighborName = neighborEntity?.name ?? neighborId.slice(0, 8);
+        const fromName = path.length === 0
+          ? fromEntity.name
+          : path[path.length - 1]!.toName;
+
+        const step: PathStep = {
+          fromId: currentId,
+          fromName,
+          toId: neighborId,
+          toName: neighborName,
+          relation: edge.relation,
+        };
+
+        const newPath = [...path, step];
+
+        if (neighborId === toId) {
+          results.push({ steps: newPath, length: newPath.length });
+        } else if (newPath.length < maxDepth) {
+          queue.push([neighborId, newPath]);
+        }
+      }
+    }
+
+    // Sort by length (shortest first)
+    results.sort((a, b) => a.length - b.length);
+    return results.slice(0, maxPaths);
+  }
+
   // -- Temporal queries -----------------------------------------------------
 
   /** Get all versions (active and invalidated) of an entity by name. */
@@ -661,6 +808,11 @@ export function computeImportance(entity: Entity, edgeCount: number, now: number
       : 0;
 
   return 0.3 * recency + 0.3 * degree + 0.25 * accessScore + 0.15 * entity.confidence;
+}
+
+function computeContentHash(name: string, summary?: string | null): string {
+  const content = name + "\0" + (summary ?? "");
+  return createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
 
 function toEntity(row: EntityRow): Entity {

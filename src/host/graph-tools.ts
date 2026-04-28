@@ -10,6 +10,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryGraphEngine, EntityInput } from "./graph-engine.js";
 import { consolidateGraph, type ConsolidationResult } from "./graph-consolidator.js";
+import { detectCommunities, getCommunities, getCommunityForEntity, type Community } from "./graph-community.js";
+import { summarizeCommunities, type SummarizeFn } from "./graph-community.js";
+import { inferRelationTypes, type InferRelationFn } from "./graph-inference.js";
+import { exportGraph, type ExportFormat } from "./graph-export.js";
 import {
   buildL1Context,
   buildL2Context,
@@ -323,4 +327,311 @@ export function memoryConsolidate(
   input: MemoryConsolidateInput,
 ): MemoryConsolidateOutput {
   return consolidateGraph(engine, { dryRun: input.dryRun });
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_batch_store
+// ---------------------------------------------------------------------------
+
+export type MemoryBatchStoreInput = {
+  entities: Array<{
+    name: string;
+    type: string;
+    summary?: string;
+    confidence?: number;
+    relations?: Array<{ targetName: string; targetType: string; relation: string }>;
+  }>;
+};
+
+export type MemoryBatchStoreOutput = {
+  results: Array<{
+    entityId: string;
+    name: string;
+    isNew: boolean;
+    edgesCreated: number;
+  }>;
+  totalEntities: number;
+  totalEdges: number;
+};
+
+export function memoryBatchStore(
+  engine: MemoryGraphEngine,
+  input: MemoryBatchStoreInput,
+): MemoryBatchStoreOutput {
+  const results: MemoryBatchStoreOutput["results"] = [];
+  let totalEdges = 0;
+
+  engine.runInTransaction(() => {
+    for (const item of input.entities) {
+      const entity = engine.upsertEntity({
+        name: item.name,
+        type: item.type,
+        summary: item.summary,
+        confidence: item.confidence,
+        source: "manual",
+      });
+
+      let edgesCreated = 0;
+      if (item.relations) {
+        for (const rel of item.relations) {
+          const target = engine.upsertEntity({
+            name: rel.targetName,
+            type: rel.targetType,
+            source: "manual",
+          });
+          engine.addEdge({
+            fromId: entity.id,
+            toId: target.id,
+            relation: rel.relation,
+          });
+          edgesCreated++;
+        }
+      }
+
+      results.push({
+        entityId: entity.id,
+        name: entity.name,
+        isNew: entity.isNew,
+        edgesCreated,
+      });
+      totalEdges += edgesCreated;
+    }
+  });
+
+  return {
+    results,
+    totalEntities: results.length,
+    totalEdges,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_detect_communities
+// ---------------------------------------------------------------------------
+
+export type MemoryDetectCommunitiesInput = {
+  activeOnly?: boolean;
+};
+
+export type MemoryDetectCommunitiesOutput = {
+  communityCount: number;
+  totalEntities: number;
+  communities: Array<{
+    id: string;
+    entityCount: number;
+    sampleEntities: string[];
+  }>;
+};
+
+export function memoryDetectCommunities(
+  engine: MemoryGraphEngine,
+  input: MemoryDetectCommunitiesInput,
+): MemoryDetectCommunitiesOutput {
+  const result = detectCommunities(engine, { activeOnly: input.activeOnly ?? true });
+
+  return {
+    communityCount: result.communities.length,
+    totalEntities: result.totalEntities,
+    communities: result.communities.slice(0, 20).map((c) => ({
+      id: c.id,
+      entityCount: c.entityCount,
+      sampleEntities: c.entityIds
+        .slice(0, 5)
+        .map((id) => engine.getEntity(id)?.name ?? id.slice(0, 8)),
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_find_paths
+// ---------------------------------------------------------------------------
+
+export type MemoryFindPathsInput = {
+  from: string;
+  to: string;
+  maxDepth?: number;
+  maxPaths?: number;
+};
+
+export type MemoryFindPathsOutput = {
+  found: boolean;
+  paths: Array<{
+    steps: Array<{ from: string; relation: string; to: string }>;
+    length: number;
+  }>;
+  formatted: string;
+};
+
+export function memoryFindPaths(
+  engine: MemoryGraphEngine,
+  input: MemoryFindPathsInput,
+): MemoryFindPathsOutput {
+  // Resolve from/to by name or ID
+  let fromEntity = engine.getEntity(input.from);
+  if (!fromEntity) {
+    const matches = engine.findEntities({ name: input.from, activeOnly: true, limit: 1 });
+    fromEntity = matches[0] ?? null;
+  }
+  let toEntity = engine.getEntity(input.to);
+  if (!toEntity) {
+    const matches = engine.findEntities({ name: input.to, activeOnly: true, limit: 1 });
+    toEntity = matches[0] ?? null;
+  }
+
+  if (!fromEntity || !toEntity) {
+    return {
+      found: false,
+      paths: [],
+      formatted: `Entity not found: ${!fromEntity ? input.from : input.to}`,
+    };
+  }
+
+  const paths = engine.findPaths(fromEntity.id, toEntity.id, {
+    maxDepth: input.maxDepth ?? 3,
+    maxPaths: input.maxPaths ?? 5,
+  });
+
+  if (paths.length === 0) {
+    return {
+      found: false,
+      paths: [],
+      formatted: `No path found between "${fromEntity.name}" and "${toEntity.name}" within ${input.maxDepth ?? 3} hops`,
+    };
+  }
+
+  const formattedPaths = paths.map((p, i) => {
+    const chain = p.steps.map((s) => `${s.fromName} --[${s.relation}]--> ${s.toName}`).join(", ");
+    return `Path ${i + 1} (${p.length} hops): ${chain}`;
+  });
+
+  return {
+    found: true,
+    paths: paths.map((p) => ({
+      steps: p.steps.map((s) => ({
+        from: s.fromName,
+        relation: s.relation,
+        to: s.toName,
+      })),
+      length: p.length,
+    })),
+    formatted: `## Paths: ${fromEntity.name} → ${toEntity.name}\n${formattedPaths.join("\n")}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_export_graph
+// ---------------------------------------------------------------------------
+
+export type MemoryExportGraphInput = {
+  format?: ExportFormat;
+  centerEntity?: string;
+  depth?: number;
+};
+
+export type MemoryExportGraphOutput = {
+  content: string;
+  format: ExportFormat;
+  entityCount: number;
+  edgeCount: number;
+};
+
+export function memoryExportGraph(
+  engine: MemoryGraphEngine,
+  input: MemoryExportGraphInput,
+): MemoryExportGraphOutput {
+  let centerEntityId: string | undefined;
+  if (input.centerEntity) {
+    let entity = engine.getEntity(input.centerEntity);
+    if (!entity) {
+      const matches = engine.findEntities({ name: input.centerEntity, activeOnly: true, limit: 1 });
+      entity = matches[0] ?? null;
+    }
+    centerEntityId = entity?.id;
+  }
+
+  const result = exportGraph(engine, {
+    format: input.format ?? "mermaid",
+    centerEntityId,
+    depth: input.depth,
+  });
+
+  return {
+    content: result.content,
+    format: result.format,
+    entityCount: result.entityCount,
+    edgeCount: result.edgeCount,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_summarize_communities
+// ---------------------------------------------------------------------------
+
+export type MemorySummarizeCommunitiesInput = {
+  summarizeFn: SummarizeFn;
+};
+
+export type MemorySummarizeCommunitiesOutput = {
+  summarized: number;
+  errors: string[];
+};
+
+export async function memorySummarizeCommunities(
+  engine: MemoryGraphEngine,
+  input: MemorySummarizeCommunitiesInput,
+): Promise<MemorySummarizeCommunitiesOutput> {
+  return summarizeCommunities(engine, input.summarizeFn);
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_infer_relations
+// ---------------------------------------------------------------------------
+
+export type MemoryInferRelationsInput = {
+  inferFn: InferRelationFn;
+  targetRelations?: string[];
+  maxEdges?: number;
+  autoApply?: boolean;
+};
+
+export type MemoryInferRelationsOutput = {
+  analyzed: number;
+  suggestions: Array<{
+    fromName: string;
+    toName: string;
+    currentRelation: string;
+    suggestedRelation: string;
+    confidence: number;
+    reason?: string;
+  }>;
+  applied: boolean;
+  errors: string[];
+};
+
+export async function memoryInferRelations(
+  engine: MemoryGraphEngine,
+  input: MemoryInferRelationsInput,
+): Promise<MemoryInferRelationsOutput> {
+  const result = await inferRelationTypes(engine, input.inferFn, {
+    targetRelations: input.targetRelations,
+    maxEdges: input.maxEdges,
+  });
+
+  if (input.autoApply && result.suggestions.length > 0) {
+    result.applySuggestions(engine);
+  }
+
+  return {
+    analyzed: result.analyzed,
+    suggestions: result.suggestions.map((s) => ({
+      fromName: s.fromName,
+      toName: s.toName,
+      currentRelation: s.currentRelation,
+      suggestedRelation: s.suggestedRelation,
+      confidence: s.confidence,
+      reason: s.reason,
+    })),
+    applied: input.autoApply ?? false,
+    errors: result.errors,
+  };
 }

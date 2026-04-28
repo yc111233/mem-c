@@ -12,7 +12,7 @@
 | 1.4 | 嵌入函数钩子 | `embedFn` 自动生成嵌入向量 | Mem0 (多模型支持) |
 | 1.5 | 实体名称归一化 | `entity_aliases` 表 + 大小写不敏感匹配 | Cognee (本体论), Mem0 (LLM) |
 
-## 🔜 Phase 2 (v0.4) — 性能与搜索优化
+## ✅ Phase 2 (v0.4) — 性能与搜索优化
 
 | # | 特性 | 说明 | 对标竞品 |
 |---|------|------|---------|
@@ -22,15 +22,15 @@
 | 2.4 | FTS 评分归一化 | 修正小文档集下 BM25 分数过低的问题 | — |
 | 2.5 | 搜索结果缓存 | 热门查询短期 LRU 缓存 | Letta (in-memory cache) |
 
-## 📋 Phase 3 (v0.5) — 高级图谱能力
+## ✅ Phase 3a (v0.5) — 高级图谱能力
 
 | # | 特性 | 说明 | 对标竞品 |
 |---|------|------|---------|
-| 3.1 | 社区检测 | 基于图结构自动发现实体社区/集群 | GraphRAG (Leiden 算法) |
-| 3.2 | 社区摘要 | LLM 为每个社区生成摘要，用于全局搜索 | GraphRAG (community summaries) |
-| 3.3 | 多跳推理 | 支持多跳路径查询（A→B→C 推理链路） | Graphiti (BFS + episodic) |
-| 3.4 | 关系类型推断 | LLM 辅助推断隐含关系 | Cognee (ontology-based) |
-| 3.5 | 图谱可视化导出 | 导出为 Mermaid / DOT / JSON 格式 | — |
+| ✅ 3.1 | 社区检测 | 基于图结构自动发现实体社区/集群 | GraphRAG (Leiden 算法) |
+| ✅ 3.2 | 社区摘要 | LLM 为每个社区生成摘要，用于全局搜索 | GraphRAG (community summaries) |
+| ✅ 3.3 | 多跳推理 | 支持多跳路径查询（A→B→C 推理链路） | Graphiti (BFS + episodic) |
+| ✅ 3.4 | 关系类型推断 | LLM 辅助推断隐含关系 | Cognee (ontology-based) |
+| ✅ 3.5 | 图谱可视化导出 | 导出为 Mermaid / DOT / JSON 格式 | — |
 
 ## 📋 Phase 4 (v0.6) — 生态与协议
 
@@ -45,7 +45,7 @@
 
 | # | 特性 | 说明 |
 |---|------|------|
-| 5.1 | WAL 模式 + 并发优化 | SQLite WAL journal mode，支持并发读 |
+| ~~5.1~~ | ~~WAL 模式 + 并发优化~~ | ✅ 已在 v0.3.1 实现 (PRAGMA journal_mode=WAL + busy_timeout) |
 | 5.2 | 备份与恢复 | 增量备份 + 时间点恢复 |
 | 5.3 | 性能基准测试 | 标准化 benchmark suite，CI 中持续追踪 |
 | 5.4 | 文档站点 | 完整的 API 文档 + 教程 + 最佳实践 |

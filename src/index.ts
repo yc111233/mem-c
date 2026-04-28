@@ -30,12 +30,16 @@ export {
   type Entity,
   type Edge,
   type GraphSubset,
+  type PathStep,
+  type PathResult,
+  type FindPathsOpts,
   type EntityVersion,
 } from "./host/graph-engine.js";
 
 // Hybrid search (vector + FTS + graph)
 export {
   searchGraph,
+  clearSearchCache,
   type GraphSearchOpts,
   type GraphSearchResult,
 } from "./host/graph-search.js";
@@ -61,14 +65,22 @@ export {
 export {
   memoryGraphSearch,
   memoryStore,
+  memoryBatchStore,
   memoryDetail,
   memoryGraph,
   memoryInvalidate,
   memoryConsolidate,
+  memoryDetectCommunities,
+  memoryFindPaths,
+  memoryExportGraph,
+  memorySummarizeCommunities,
+  memoryInferRelations,
   type MemoryGraphSearchInput,
   type MemoryGraphSearchOutput,
   type MemoryStoreInput,
   type MemoryStoreOutput,
+  type MemoryBatchStoreInput,
+  type MemoryBatchStoreOutput,
   type MemoryDetailInput,
   type MemoryDetailOutput,
   type MemoryGraphInput,
@@ -77,7 +89,46 @@ export {
   type MemoryInvalidateOutput,
   type MemoryConsolidateInput,
   type MemoryConsolidateOutput,
+  type MemoryDetectCommunitiesInput,
+  type MemoryDetectCommunitiesOutput,
+  type MemoryFindPathsInput,
+  type MemoryFindPathsOutput,
+  type MemoryExportGraphInput,
+  type MemoryExportGraphOutput,
+  type MemorySummarizeCommunitiesInput,
+  type MemorySummarizeCommunitiesOutput,
+  type MemoryInferRelationsInput,
+  type MemoryInferRelationsOutput,
 } from "./host/graph-tools.js";
+
+// Community detection
+export {
+  detectCommunities,
+  getCommunities,
+  getCommunityForEntity,
+  type Community,
+  type DetectionResult,
+  type DetectionOpts,
+  type SummarizeFn,
+  COMMUNITY_SUMMARY_PROMPT,
+} from "./host/graph-community.js";
+
+// Relation inference
+export {
+  inferRelationTypes,
+  type InferRelationFn,
+  type InferenceSuggestion,
+  type InferenceResult,
+  type InferenceOpts,
+} from "./host/graph-inference.js";
+
+// Graph export (Mermaid / DOT / JSON)
+export {
+  exportGraph,
+  type ExportFormat,
+  type ExportOpts as GraphExportOpts,
+  type ExportResult as GraphExportResult,
+} from "./host/graph-export.js";
 
 // Graph consolidation
 export {
@@ -103,3 +154,12 @@ export {
   migrateMarkdownMemory,
   type MigrationResult,
 } from "./host/graph-migrate.js";
+
+// sqlite-vec ANN index
+export {
+  ensureVecIndex,
+  vecUpsert,
+  vecRemove,
+  vecKnn,
+  vecSyncAll,
+} from "./host/graph-vec.js";

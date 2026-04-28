@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { MemoryGraphEngine } from "./graph-engine.js";
+import { ensureVecIndex, vecSyncAll } from "./graph-vec.js";
 
 /**
  * Entity types supported by the memory graph.
@@ -36,6 +38,7 @@ export type EntityRow = {
   updated_at: number;
   access_count: number;
   last_accessed_at: number;
+  content_hash: string | null;
 };
 
 export type EdgeRow = {
@@ -72,7 +75,10 @@ const ENTITY_FTS_TABLE = "entities_fts";
 export function ensureGraphSchema(params: {
   db: DatabaseSync;
   ftsEnabled?: boolean;
-}): { entityFtsAvailable: boolean; entityFtsError?: string } {
+  engine?: MemoryGraphEngine;
+  /** Embedding dimensions for sqlite-vec ANN index. Default 1536. */
+  vecDimensions?: number;
+}): { entityFtsAvailable: boolean; entityFtsError?: string; vecAvailable: boolean; vecError?: string } {
   const { db } = params;
 
   // -- WAL mode + busy timeout (safe for multi-process concurrent access) ------
@@ -105,6 +111,9 @@ export function ensureGraphSchema(params: {
   // On fresh databases these columns already exist in CREATE TABLE; ALTER silently fails.
   try { db.exec(`ALTER TABLE entities ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE entities ADD COLUMN last_accessed_at INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
+
+  // Content hash for incremental embedding
+  try { db.exec(`ALTER TABLE entities ADD COLUMN content_hash TEXT`); } catch { /* already exists */ }
 
   // -- edges ------------------------------------------------------------------
   db.exec(`
@@ -158,6 +167,29 @@ export function ensureGraphSchema(params: {
     );
   `);
 
+  // -- communities -----------------------------------------------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS communities (
+      id TEXT PRIMARY KEY,
+      label TEXT,
+      entity_count INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_communities_updated ON communities(updated_at);`);
+
+  // -- community_members -----------------------------------------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS community_members (
+      community_id TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+      entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      PRIMARY KEY (community_id, entity_id)
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_cm_entity ON community_members(entity_id);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_cm_community ON community_members(community_id);`);
+
   // -- entity FTS -------------------------------------------------------------
   let entityFtsAvailable = false;
   let entityFtsError: string | undefined;
@@ -173,6 +205,27 @@ export function ensureGraphSchema(params: {
       const message = err instanceof Error ? err.message : String(err);
       entityFtsError = message;
     }
+  }
+
+  // -- sqlite-vec ANN index ----------------------------------------------------
+  let vecAvailable = false;
+  let vecError: string | undefined;
+  try {
+    const vecResult = ensureVecIndex(db, params.vecDimensions ?? 1536);
+    vecAvailable = vecResult.available;
+    vecError = vecResult.error;
+  } catch {
+    // vec not available — non-fatal
+  }
+
+  // Sync existing embeddings into vec index on first init
+  if (vecAvailable) {
+    vecSyncAll(db, true);
+  }
+
+  // Wire vec availability to engine if provided
+  if (params.engine) {
+    params.engine.setVecAvailable(vecAvailable);
   }
 
   // -- Embedding TEXT → BLOB migration -----------------------------------------
@@ -201,7 +254,7 @@ export function ensureGraphSchema(params: {
     // Migration is best-effort
   }
 
-  return { entityFtsAvailable, ...(entityFtsError ? { entityFtsError } : {}) };
+  return { entityFtsAvailable, ...(entityFtsError ? { entityFtsError } : {}), vecAvailable, ...(vecError ? { vecError } : {}) };
 }
 
 /** Sync an entity row into the FTS index (upsert). */

@@ -1,6 +1,58 @@
 import type { DatabaseSync } from "node:sqlite";
 import { deserializeEmbedding, type Entity, type Edge, type MemoryGraphEngine } from "./graph-engine.js";
 import { searchEntityFts } from "./graph-schema.js";
+import { vecKnn } from "./graph-vec.js";
+
+// ---------------------------------------------------------------------------
+// Search result cache (LRU with TTL)
+// ---------------------------------------------------------------------------
+
+type CacheEntry = {
+  results: GraphSearchResult[];
+  timestamp: number;
+};
+
+const searchCache = new Map<string, CacheEntry>();
+const DEFAULT_CACHE_MAX = 128;
+const DEFAULT_CACHE_TTL_MS = 30_000; // 30 seconds
+
+function makeCacheKey(query: string, opts?: GraphSearchOpts): string {
+  const parts = [
+    query,
+    opts?.maxResults ?? 10,
+    opts?.minScore ?? 0.1,
+    opts?.types?.join(",") ?? "",
+    opts?.activeOnly ?? true,
+    opts?.vectorWeight ?? 0.5,
+    opts?.ftsWeight ?? 0.3,
+    opts?.graphWeight ?? 0.2,
+    opts?.temporalDecayDays ?? 30,
+  ];
+  return parts.join("\x00");
+}
+
+function cacheGet(key: string, ttlMs: number): GraphSearchResult[] | null {
+  const entry = searchCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > ttlMs) {
+    searchCache.delete(key);
+    return null;
+  }
+  return entry.results;
+}
+
+function cacheSet(key: string, results: GraphSearchResult[]): void {
+  if (searchCache.size >= DEFAULT_CACHE_MAX) {
+    const oldest = searchCache.keys().next().value;
+    if (oldest !== undefined) searchCache.delete(oldest);
+  }
+  searchCache.set(key, { results, timestamp: Date.now() });
+}
+
+/** Clear the search result cache. Called automatically on entity writes. */
+export function clearSearchCache(): void {
+  searchCache.clear();
+}
 
 // ---------------------------------------------------------------------------
 // Search options and result types
@@ -29,6 +81,8 @@ export type GraphSearchOpts = {
   temporalDecayDays?: number;
   /** Query embedding vector (caller provides). */
   queryEmbedding?: number[];
+  /** Cache TTL in ms. 0 = no cache. Default 30000 (30s). */
+  cacheTtlMs?: number;
 };
 
 export type GraphSearchResult = {
@@ -57,6 +111,15 @@ export function searchGraph(
   query: string,
   opts?: GraphSearchOpts,
 ): GraphSearchResult[] {
+  const cacheTtlMs = opts?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
+
+  // Check cache
+  if (cacheTtlMs > 0) {
+    const cacheKey = makeCacheKey(query, opts);
+    const cached = cacheGet(cacheKey, cacheTtlMs);
+    if (cached) return cached;
+  }
+
   const maxResults = opts?.maxResults ?? 10;
   const minScore = opts?.minScore ?? 0.1;
   const activeOnly = opts?.activeOnly ?? true;
@@ -71,7 +134,11 @@ export function searchGraph(
   if (!queryEmbedding && query.trim()) {
     const embedFn = engine.getEmbedFn();
     if (embedFn) {
-      queryEmbedding = embedFn(query);
+      try {
+        queryEmbedding = embedFn(query);
+      } catch {
+        // Non-fatal: fall back to FTS-only search
+      }
     }
   }
 
@@ -83,12 +150,13 @@ export function searchGraph(
   try {
     const ftsResults = searchEntityFts(db, query, { limit: candidateLimit });
     if (ftsResults.length > 0) {
-      // FTS5 rank is negative; normalize relative to best hit (best = 1.0)
-      const bestRank = -ftsResults[0]!.rank; // most negative = best match
+      // FTS5 BM25 rank is negative; more negative = better match.
+      // Normalize: score = -rank / (-rank + 1) maps (-inf,0) → (0,1)
+      // Works well even with small document sets where relative normalization fails.
       for (const hit of ftsResults) {
-        const normalizedScore = bestRank > 0
-          ? Math.min(1, (-hit.rank) / bestRank)
-          : 0.5; // fallback if all ranks are 0
+        const rawRank = hit.rank; // negative
+        const normalizedScore = Math.min(1, Math.max(0, -rawRank / (-rawRank + 1)));
+
         const existing = candidateScores.get(hit.id);
         if (existing) {
           existing.fts = normalizedScore;
@@ -103,7 +171,7 @@ export function searchGraph(
 
   // Path 2: Vector similarity (if embedding provided)
   if (queryEmbedding && queryEmbedding.length > 0) {
-    const vectorHits = vectorSearchEntities(db, queryEmbedding, candidateLimit, activeOnly);
+    const vectorHits = vectorSearchEntities(db, engine, queryEmbedding, candidateLimit, activeOnly);
     for (const hit of vectorHits) {
       const existing = candidateScores.get(hit.id);
       if (existing) {
@@ -205,7 +273,14 @@ export function searchGraph(
   results.sort((a, b) => b.score - a.score);
 
   // MMR-style diversity: avoid returning too many entities of the same type
-  return applyDiversityFilter(results, maxResults);
+  const finalResults = applyDiversityFilter(results, maxResults);
+
+  if (cacheTtlMs > 0) {
+    const cacheKey = makeCacheKey(query, opts);
+    cacheSet(cacheKey, finalResults);
+  }
+
+  return finalResults;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,17 +289,40 @@ export function searchGraph(
 
 type VectorHit = { id: string; similarity: number };
 
-// TODO: integrate sqlite-vec for native ANN search to avoid full table scan
+// Full scan limit used when sqlite-vec is not available
 const VECTOR_SCAN_LIMIT = 5000;
 
 function vectorSearchEntities(
   db: DatabaseSync,
+  engine: MemoryGraphEngine,
   queryEmbedding: number[],
   limit: number,
   activeOnly: boolean,
 ): VectorHit[] {
+  // Path 1: sqlite-vec ANN index (fast path)
+  if (engine.vecAvailable()) {
+    try {
+      const knnResults = vecKnn(db, queryEmbedding, limit * 2, true);
+      if (knnResults.length > 0) {
+        const hits: VectorHit[] = [];
+        for (const r of knnResults) {
+          if (activeOnly) {
+            const entity = engine.getEntity(r.id);
+            if (!entity || entity.valid_until !== null) continue;
+          }
+          const similarity = 1 / (1 + r.distance);
+          hits.push({ id: r.id, similarity });
+        }
+        hits.sort((a, b) => b.similarity - a.similarity);
+        return hits.slice(0, limit);
+      }
+    } catch {
+      // Fall through to full scan
+    }
+  }
+
+  // Path 2: Full scan fallback (original implementation)
   try {
-    // Full scan with recency bias — most recently updated entities are searched first
     const scanLimit = Math.min(VECTOR_SCAN_LIMIT, Math.max(limit * 2, 100));
     const rows = db
       .prepare(
@@ -241,7 +339,6 @@ function vectorSearchEntities(
         if (typeof row.embedding === "string") {
           stored = JSON.parse(row.embedding) as number[];
         } else {
-          // BLOB storage — Buffer at runtime
           stored = deserializeEmbedding(row.embedding as Buffer);
         }
         const sim = cosineSimilarity(queryEmbedding, stored);
