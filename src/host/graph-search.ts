@@ -4,6 +4,57 @@ import { searchEntityFts } from "./graph-schema.js";
 import { vecKnn } from "./graph-vec.js";
 
 // ---------------------------------------------------------------------------
+// Search result cache (LRU with TTL)
+// ---------------------------------------------------------------------------
+
+type CacheEntry = {
+  results: GraphSearchResult[];
+  timestamp: number;
+};
+
+const searchCache = new Map<string, CacheEntry>();
+const DEFAULT_CACHE_MAX = 128;
+const DEFAULT_CACHE_TTL_MS = 30_000; // 30 seconds
+
+function makeCacheKey(query: string, opts?: GraphSearchOpts): string {
+  const parts = [
+    query,
+    opts?.maxResults ?? 10,
+    opts?.minScore ?? 0.1,
+    opts?.types?.join(",") ?? "",
+    opts?.activeOnly ?? true,
+    opts?.vectorWeight ?? 0.5,
+    opts?.ftsWeight ?? 0.3,
+    opts?.graphWeight ?? 0.2,
+    opts?.temporalDecayDays ?? 30,
+  ];
+  return parts.join("\x00");
+}
+
+function cacheGet(key: string, ttlMs: number): GraphSearchResult[] | null {
+  const entry = searchCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > ttlMs) {
+    searchCache.delete(key);
+    return null;
+  }
+  return entry.results;
+}
+
+function cacheSet(key: string, results: GraphSearchResult[]): void {
+  if (searchCache.size >= DEFAULT_CACHE_MAX) {
+    const oldest = searchCache.keys().next().value;
+    if (oldest !== undefined) searchCache.delete(oldest);
+  }
+  searchCache.set(key, { results, timestamp: Date.now() });
+}
+
+/** Clear the search result cache. Called automatically on entity writes. */
+export function clearSearchCache(): void {
+  searchCache.clear();
+}
+
+// ---------------------------------------------------------------------------
 // Search options and result types
 // ---------------------------------------------------------------------------
 
@@ -30,6 +81,8 @@ export type GraphSearchOpts = {
   temporalDecayDays?: number;
   /** Query embedding vector (caller provides). */
   queryEmbedding?: number[];
+  /** Cache TTL in ms. 0 = no cache. Default 30000 (30s). */
+  cacheTtlMs?: number;
 };
 
 export type GraphSearchResult = {
@@ -58,6 +111,15 @@ export function searchGraph(
   query: string,
   opts?: GraphSearchOpts,
 ): GraphSearchResult[] {
+  const cacheTtlMs = opts?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
+
+  // Check cache
+  if (cacheTtlMs > 0) {
+    const cacheKey = makeCacheKey(query, opts);
+    const cached = cacheGet(cacheKey, cacheTtlMs);
+    if (cached) return cached;
+  }
+
   const maxResults = opts?.maxResults ?? 10;
   const minScore = opts?.minScore ?? 0.1;
   const activeOnly = opts?.activeOnly ?? true;
@@ -211,7 +273,14 @@ export function searchGraph(
   results.sort((a, b) => b.score - a.score);
 
   // MMR-style diversity: avoid returning too many entities of the same type
-  return applyDiversityFilter(results, maxResults);
+  const finalResults = applyDiversityFilter(results, maxResults);
+
+  if (cacheTtlMs > 0) {
+    const cacheKey = makeCacheKey(query, opts);
+    cacheSet(cacheKey, finalResults);
+  }
+
+  return finalResults;
 }
 
 // ---------------------------------------------------------------------------

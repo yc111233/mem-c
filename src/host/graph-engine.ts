@@ -10,6 +10,7 @@ import {
   type EpisodeRow,
 } from "./graph-schema.js";
 import { vecUpsert, vecRemove } from "./graph-vec.js";
+import { clearSearchCache } from "./graph-search.js";
 
 // ---------------------------------------------------------------------------
 // Embedding serialization (Float32Array ↔ Buffer)
@@ -240,6 +241,7 @@ export class MemoryGraphEngine {
         if (this._vecAvailable && embedding) {
           vecUpsert(this.db, updated.id, embedding, true);
         }
+        clearSearchCache();
         return { ...toEntity(updated), isNew: false };
       }
 
@@ -272,6 +274,7 @@ export class MemoryGraphEngine {
       if (this._vecAvailable && embedding) {
         vecUpsert(this.db, row.id, embedding, true);
       }
+      clearSearchCache();
       return { ...toEntity(row), isNew: true };
     });
   }
@@ -371,6 +374,7 @@ export class MemoryGraphEngine {
         .run(now, id, id);
 
       removeEntityFts(this.db, id);
+      clearSearchCache();
 
       if (this._vecAvailable) {
         vecRemove(this.db, id, true);

@@ -36,6 +36,7 @@ export {
 // Hybrid search (vector + FTS + graph)
 export {
   searchGraph,
+  clearSearchCache,
   type GraphSearchOpts,
   type GraphSearchResult,
 } from "./host/graph-search.js";

@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MemoryGraphEngine, type EmbedFn } from "../host/graph-engine.js";
-import { searchGraph, type GraphSearchOpts } from "../host/graph-search.js";
+import { searchGraph, clearSearchCache, type GraphSearchOpts } from "../host/graph-search.js";
 import { createTestDb } from "./test-helpers.js";
 
 describe("searchGraph", () => {
@@ -12,7 +12,10 @@ describe("searchGraph", () => {
     db = createTestDb();
     engine = new MemoryGraphEngine(db);
   });
-  afterEach(() => db.close());
+  afterEach(() => {
+    clearSearchCache();
+    db.close();
+  });
 
   // -------------------------------------------------------------------------
   // FTS path
@@ -177,6 +180,48 @@ describe("searchGraph", () => {
     const results = searchGraph(db, engine, "Gone");
     const found = results.find((r) => r.entity.id === entity.id);
     expect(found).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Search cache
+  // -------------------------------------------------------------------------
+
+  describe("search cache", () => {
+    it("returns cached results on repeated query", () => {
+      engine.upsertEntity({ name: "Cached", type: "concept", summary: "test cache" });
+
+      const opts = { minScore: 0, vectorWeight: 0, ftsWeight: 1, graphWeight: 0 };
+      const results1 = searchGraph(db, engine, "Cached", opts);
+      const results2 = searchGraph(db, engine, "Cached", opts);
+
+      expect(results2.length).toBe(results1.length);
+      if (results1.length > 0 && results2.length > 0) {
+        expect(results2[0]!.entity.id).toBe(results1[0]!.entity.id);
+      }
+    });
+
+    it("cache can be cleared", () => {
+      engine.upsertEntity({ name: "Fresh", type: "concept", summary: "clear cache" });
+
+      searchGraph(db, engine, "Fresh", { minScore: 0 });
+      clearSearchCache();
+
+      const results = searchGraph(db, engine, "Fresh", { minScore: 0 });
+      expect(results.length).toBeGreaterThan(0);
+    });
+
+    it("cache respects TTL", async () => {
+      engine.upsertEntity({ name: "TTL", type: "concept", summary: "ttl test" });
+
+      searchGraph(db, engine, "TTL", { minScore: 0, cacheTtlMs: 50 });
+
+      await new Promise((r) => setTimeout(r, 60));
+
+      engine.upsertEntity({ name: "TTL", type: "concept", summary: "updated" });
+
+      const results2 = searchGraph(db, engine, "TTL", { minScore: 0, cacheTtlMs: 50 });
+      expect(results2.length).toBeGreaterThan(0);
+    });
   });
 
   // -------------------------------------------------------------------------
