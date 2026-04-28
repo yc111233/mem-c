@@ -11,6 +11,8 @@ import type { DatabaseSync } from "node:sqlite";
 import type { MemoryGraphEngine, EntityInput } from "./graph-engine.js";
 import { consolidateGraph, type ConsolidationResult } from "./graph-consolidator.js";
 import { detectCommunities, getCommunities, getCommunityForEntity, type Community } from "./graph-community.js";
+import { summarizeCommunities, type SummarizeFn } from "./graph-community.js";
+import { inferRelationTypes, type InferRelationFn } from "./graph-inference.js";
 import { exportGraph, type ExportFormat } from "./graph-export.js";
 import {
   buildL1Context,
@@ -558,5 +560,78 @@ export function memoryExportGraph(
     format: result.format,
     entityCount: result.entityCount,
     edgeCount: result.edgeCount,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_summarize_communities
+// ---------------------------------------------------------------------------
+
+export type MemorySummarizeCommunitiesInput = {
+  summarizeFn: SummarizeFn;
+};
+
+export type MemorySummarizeCommunitiesOutput = {
+  summarized: number;
+  errors: string[];
+};
+
+export async function memorySummarizeCommunities(
+  engine: MemoryGraphEngine,
+  input: MemorySummarizeCommunitiesInput,
+): Promise<MemorySummarizeCommunitiesOutput> {
+  return summarizeCommunities(engine, input.summarizeFn);
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_infer_relations
+// ---------------------------------------------------------------------------
+
+export type MemoryInferRelationsInput = {
+  inferFn: InferRelationFn;
+  targetRelations?: string[];
+  maxEdges?: number;
+  autoApply?: boolean;
+};
+
+export type MemoryInferRelationsOutput = {
+  analyzed: number;
+  suggestions: Array<{
+    fromName: string;
+    toName: string;
+    currentRelation: string;
+    suggestedRelation: string;
+    confidence: number;
+    reason?: string;
+  }>;
+  applied: boolean;
+  errors: string[];
+};
+
+export async function memoryInferRelations(
+  engine: MemoryGraphEngine,
+  input: MemoryInferRelationsInput,
+): Promise<MemoryInferRelationsOutput> {
+  const result = await inferRelationTypes(engine, input.inferFn, {
+    targetRelations: input.targetRelations,
+    maxEdges: input.maxEdges,
+  });
+
+  if (input.autoApply && result.suggestions.length > 0) {
+    result.applySuggestions(engine);
+  }
+
+  return {
+    analyzed: result.analyzed,
+    suggestions: result.suggestions.map((s) => ({
+      fromName: s.fromName,
+      toName: s.toName,
+      currentRelation: s.currentRelation,
+      suggestedRelation: s.suggestedRelation,
+      confidence: s.confidence,
+      reason: s.reason,
+    })),
+    applied: input.autoApply ?? false,
+    errors: result.errors,
   };
 }

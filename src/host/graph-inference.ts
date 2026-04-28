@@ -3,7 +3,8 @@
  * Uses LLM callback to analyze entity pairs and suggest more specific relations.
  */
 
-import type { MemoryGraphEngine, Edge } from "./graph-engine.js";
+import type { MemoryGraphEngine } from "./graph-engine.js";
+import type { EdgeRow } from "./graph-schema.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -86,7 +87,7 @@ export async function inferRelationTypes(
     .prepare(
       `SELECT * FROM edges WHERE valid_until IS NULL ORDER BY created_at DESC LIMIT ?`,
     )
-    .all(maxEdges * 2) as Array<Edge>;
+    .all(maxEdges * 2) as Array<EdgeRow>;
 
   const candidateEdges = allEdges
     .filter((e) => targetSet.has(e.relation))

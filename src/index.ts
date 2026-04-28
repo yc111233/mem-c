@@ -73,6 +73,8 @@ export {
   memoryDetectCommunities,
   memoryFindPaths,
   memoryExportGraph,
+  memorySummarizeCommunities,
+  memoryInferRelations,
   type MemoryGraphSearchInput,
   type MemoryGraphSearchOutput,
   type MemoryStoreInput,
@@ -93,6 +95,10 @@ export {
   type MemoryFindPathsOutput,
   type MemoryExportGraphInput,
   type MemoryExportGraphOutput,
+  type MemorySummarizeCommunitiesInput,
+  type MemorySummarizeCommunitiesOutput,
+  type MemoryInferRelationsInput,
+  type MemoryInferRelationsOutput,
 } from "./host/graph-tools.js";
 
 // Community detection
@@ -103,7 +109,18 @@ export {
   type Community,
   type DetectionResult,
   type DetectionOpts,
+  type SummarizeFn,
+  COMMUNITY_SUMMARY_PROMPT,
 } from "./host/graph-community.js";
+
+// Relation inference
+export {
+  inferRelationTypes,
+  type InferRelationFn,
+  type InferenceSuggestion,
+  type InferenceResult,
+  type InferenceOpts,
+} from "./host/graph-inference.js";
 
 // Graph export (Mermaid / DOT / JSON)
 export {
