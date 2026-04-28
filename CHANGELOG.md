@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0] - 2026-04-28
+
+### Added
+- **Document import pipeline**: `importDocument()` — unified API for importing documents into the knowledge graph. Pipeline: parse → smart chunk → LLM extract → merge. Supports pluggable parsers.
+- **Smart chunker**: `smartChunk()` — semantic boundary-aware text splitting (paragraph > sentence > hard cut).
+- **Markdown parser**: `markdownParser()` — heading-based document chunking.
+- **Text parser**: `textParser()` — simple single-chunk parser for plain text.
+
 ## [0.6.0] - 2026-04-28
 
 ### Added

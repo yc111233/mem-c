@@ -156,6 +156,22 @@ export {
   type MigrationResult,
 } from "./host/graph-migrate.js";
 
+// Document import pipeline
+export {
+  importDocument,
+  smartChunk,
+  type DocumentChunk,
+  type DocumentParser,
+  type ImportOpts,
+  type ImportResult,
+} from "./host/graph-import.js";
+
+// Document parsers
+export {
+  markdownParser,
+  textParser,
+} from "./host/graph-parsers.js";
+
 // sqlite-vec ANN index
 export {
   ensureVecIndex,
