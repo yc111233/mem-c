@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { MemoryGraphEngine } from "../host/graph-engine.js";
-import { importDocument, smartChunk, type DocumentParser } from "../host/graph-import.js";
+import { importDocument, smartChunk, batchChatImport, type DocumentParser } from "../host/graph-import.js";
 import { createTestDb } from "./test-helpers.js";
 
 describe("smartChunk", () => {
@@ -112,5 +112,48 @@ describe("importDocument", () => {
     });
 
     expect(result.chunksProcessed).toBe(0);
+  });
+});
+
+describe("batchChatImport", () => {
+  let db: DatabaseSync;
+  let engine: MemoryGraphEngine;
+
+  beforeEach(() => {
+    db = createTestDb();
+    engine = new MemoryGraphEngine(db);
+  });
+  afterEach(() => db.close());
+
+  it("imports multiple chat sessions", async () => {
+    const mockExtract = async () =>
+      JSON.stringify({
+        entities: [{ name: "ChatEntity", type: "concept", summary: "from chat", confidence: 0.9 }],
+        relations: [],
+        invalidations: [],
+      });
+
+    const sessions = [
+      [{ role: "user" as const, content: "I really love using React for building frontend applications with components" }],
+      [{ role: "user" as const, content: "Vue is also a great framework for building modern web applications" }],
+    ];
+
+    const result = await batchChatImport(engine, sessions, {
+      llmExtract: mockExtract,
+    });
+
+    expect(result.sessionsProcessed).toBe(2);
+    expect(result.totalEntitiesCreated).toBeGreaterThanOrEqual(1);
+  });
+
+  it("handles empty sessions", async () => {
+    const mockExtract = async () =>
+      JSON.stringify({ entities: [], relations: [], invalidations: [] });
+
+    const result = await batchChatImport(engine, [], {
+      llmExtract: mockExtract,
+    });
+
+    expect(result.sessionsProcessed).toBe(0);
   });
 });

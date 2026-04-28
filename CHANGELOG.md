@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1] - 2026-04-28
+
+### Added
+- **PDF parser factory**: `pdfParser(extractText)` — accepts a PDF-to-text callback, splits on page breaks.
+- **Feishu document parser factory**: `feishuParser(fetchContent)` — accepts a Feishu API callback, delegates to markdown parser.
+- **Batch chat import**: `batchChatImport(engine, sessions, opts)` — import multiple chat sessions in one call.
+- `DocumentParser` type is now async-compatible: `(content: string) => DocumentChunk[] | Promise<DocumentChunk[]>`.
+
 ## [0.7.0] - 2026-04-28
 
 ### Added

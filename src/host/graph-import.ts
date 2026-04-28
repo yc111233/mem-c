@@ -17,7 +17,7 @@ export type DocumentChunk = {
   headingLevel?: number;
 };
 
-export type DocumentParser = (content: string) => DocumentChunk[];
+export type DocumentParser = (content: string) => DocumentChunk[] | Promise<DocumentChunk[]>;
 
 export type ImportOpts = {
   content: string;
@@ -119,7 +119,7 @@ export async function importDocument(
   const maxChunkChars = (opts.chunkSize ?? 2000) * 4;
   const sessionKey = opts.sessionKey ?? `import-${Date.now()}`;
 
-  const parsedChunks = opts.parser(opts.content);
+  const parsedChunks = await opts.parser(opts.content);
 
   const allChunks: DocumentChunk[] = [];
   for (const chunk of parsedChunks) {
@@ -164,6 +164,78 @@ export async function importDocument(
     } catch (err) {
       result.errors.push(
         `chunk ${chunk.index}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Batch Chat Import
+// ---------------------------------------------------------------------------
+
+export type ChatMessage = {
+  role: "user" | "assistant" | "system";
+  content: string;
+  timestamp?: number;
+};
+
+export type BatchImportOpts = {
+  llmExtract: LlmExtractFn;
+  sessionKeyPrefix?: string;
+};
+
+export type BatchImportResult = {
+  sessionsProcessed: number;
+  totalEntitiesCreated: number;
+  totalEntitiesUpdated: number;
+  totalEdgesCreated: number;
+  errors: string[];
+};
+
+/**
+ * Import multiple chat sessions into the graph.
+ * Each session is an array of messages that gets formatted as a transcript.
+ */
+export async function batchChatImport(
+  engine: MemoryGraphEngine,
+  sessions: ChatMessage[][],
+  opts: BatchImportOpts,
+): Promise<BatchImportResult> {
+  const result: BatchImportResult = {
+    sessionsProcessed: 0,
+    totalEntitiesCreated: 0,
+    totalEntitiesUpdated: 0,
+    totalEdgesCreated: 0,
+    errors: [],
+  };
+
+  const prefix = opts.sessionKeyPrefix ?? "chat";
+
+  for (let i = 0; i < sessions.length; i++) {
+    const messages = sessions[i]!;
+    const transcript = messages
+      .map((m) => `${m.role}: ${m.content}`)
+      .join("\n");
+
+    if (transcript.trim().length === 0) continue;
+
+    try {
+      const extractResult = await extractAndMerge({
+        engine,
+        transcript,
+        sessionKey: `${prefix}-${i}`,
+        llmExtract: opts.llmExtract,
+      });
+
+      result.sessionsProcessed++;
+      result.totalEntitiesCreated += extractResult.entitiesCreated;
+      result.totalEntitiesUpdated += extractResult.entitiesUpdated;
+      result.totalEdgesCreated += extractResult.edgesCreated;
+    } catch (err) {
+      result.errors.push(
+        `session ${i}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

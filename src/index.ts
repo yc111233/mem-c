@@ -160,16 +160,22 @@ export {
 export {
   importDocument,
   smartChunk,
+  batchChatImport,
   type DocumentChunk,
   type DocumentParser,
   type ImportOpts,
   type ImportResult,
+  type ChatMessage,
+  type BatchImportOpts,
+  type BatchImportResult,
 } from "./host/graph-import.js";
 
 // Document parsers
 export {
   markdownParser,
   textParser,
+  pdfParser,
+  feishuParser,
 } from "./host/graph-parsers.js";
 
 // sqlite-vec ANN index

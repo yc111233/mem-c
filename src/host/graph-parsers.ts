@@ -60,3 +60,44 @@ export function markdownParser(content: string): DocumentChunk[] {
 export function textParser(content: string): DocumentChunk[] {
   return [{ index: 0, content }];
 }
+
+/**
+ * Factory for PDF parser. The caller provides a function that extracts
+ * text from a PDF buffer. This keeps the library dependency-free.
+ *
+ * Usage:
+ *   import pdfParse from "pdf-parse";
+ *   const parser = pdfParser(async (content) => (await pdfParse(Buffer.from(content, "utf-8"))).text);
+ *   const result = await importDocument(engine, { content: pdfBuffer.toString(), parser, llmExtract });
+ */
+export function pdfParser(
+  extractText: (content: string) => Promise<string>,
+): (content: string) => Promise<DocumentChunk[]> {
+  return async (content: string) => {
+    const text = await extractText(content);
+    // Split on page breaks (form feed) or double newlines
+    const pages = text.split(/\f|\n{3,}/);
+    return pages
+      .map((page) => page.trim())
+      .filter((page) => page.length > 0)
+      .map((page, index) => ({ index, content: page }));
+  };
+}
+
+/**
+ * Factory for Feishu document parser.
+ * The caller provides a function that fetches document content from a Feishu URL.
+ *
+ * Usage:
+ *   const parser = feishuParser(async (url) => await feishuFetch(url));
+ *   const result = await importDocument(engine, { content: feishuUrl, parser, llmExtract });
+ */
+export function feishuParser(
+  fetchContent: (url: string) => Promise<string>,
+): (url: string) => Promise<DocumentChunk[]> {
+  return async (url: string) => {
+    const text = await fetchContent(url);
+    // Use markdown parser on the fetched content (Feishu docs export as markdown)
+    return markdownParser(text);
+  };
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownParser, textParser } from "../host/graph-parsers.js";
+import { markdownParser, textParser, pdfParser, feishuParser } from "../host/graph-parsers.js";
 
 describe("markdownParser", () => {
   it("splits on headings", () => {
@@ -68,5 +68,36 @@ describe("textParser", () => {
     const chunks = textParser("Hello world");
     expect(chunks.length).toBe(1);
     expect(chunks[0]!.content).toBe("Hello world");
+  });
+});
+
+describe("pdfParser", () => {
+  it("splits on form feed (page breaks)", async () => {
+    const parser = pdfParser(async (content) => content);
+    const chunks = await parser("Page 1 content.\fPage 2 content.\fPage 3 content.");
+    expect(chunks.length).toBe(3);
+    expect(chunks[0]!.content).toBe("Page 1 content.");
+    expect(chunks[1]!.content).toBe("Page 2 content.");
+  });
+
+  it("splits on triple newlines when no form feed", async () => {
+    const parser = pdfParser(async (content) => content);
+    const chunks = await parser("Section 1.\n\n\nSection 2.");
+    expect(chunks.length).toBe(2);
+  });
+
+  it("handles empty content", async () => {
+    const parser = pdfParser(async (content) => content);
+    const chunks = await parser("");
+    expect(chunks.length).toBe(0);
+  });
+});
+
+describe("feishuParser", () => {
+  it("fetches and parses as markdown", async () => {
+    const parser = feishuParser(async (url) => `# Doc Title\n\nContent from ${url}`);
+    const chunks = await parser("https://feishu.cn/docx/abc123");
+    expect(chunks.length).toBeGreaterThanOrEqual(1);
+    expect(chunks.some((c) => c.content.includes("abc123"))).toBe(true);
   });
 });
