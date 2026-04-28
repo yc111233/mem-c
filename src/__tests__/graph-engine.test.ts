@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MemoryGraphEngine, computeImportance, type Entity } from "../host/graph-engine.js";
+import { MemoryGraphEngine, computeImportance, type Entity, type EmbedFn } from "../host/graph-engine.js";
 import { ensureGraphSchema } from "../host/graph-schema.js";
 import { searchGraph } from "../host/graph-search.js";
 
@@ -511,5 +511,87 @@ describe("getEntitiesByImportance", () => {
   it("returns empty for no entities", () => {
     const ranked = engine.getEntitiesByImportance();
     expect(ranked).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Incremental embedding
+// ---------------------------------------------------------------------------
+
+describe("incremental embedding", () => {
+  let db: DatabaseSync;
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("skips embedFn when content has not changed", () => {
+    let callCount = 0;
+    const countingEmbed: EmbedFn = (_text) => {
+      callCount++;
+      return [1, 0, 0];
+    };
+    const eng = new MemoryGraphEngine(db, { embedFn: countingEmbed });
+
+    eng.upsertEntity({ name: "A", type: "concept", summary: "hello" });
+    expect(callCount).toBe(1);
+
+    // Same name + same summary → should NOT re-embed
+    eng.upsertEntity({ name: "A", type: "concept", summary: "hello" });
+    expect(callCount).toBe(1); // still 1, not 2
+  });
+
+  it("re-embeds when summary changes", () => {
+    let callCount = 0;
+    const countingEmbed: EmbedFn = (_text) => {
+      callCount++;
+      return [1, 0, 0];
+    };
+    const eng = new MemoryGraphEngine(db, { embedFn: countingEmbed });
+
+    eng.upsertEntity({ name: "A", type: "concept", summary: "v1" });
+    expect(callCount).toBe(1);
+
+    eng.upsertEntity({ name: "A", type: "concept", summary: "v2" });
+    expect(callCount).toBe(2);
+  });
+
+  it("always embeds new entities", () => {
+    let callCount = 0;
+    const countingEmbed: EmbedFn = (_text) => {
+      callCount++;
+      return [1, 0, 0];
+    };
+    const eng = new MemoryGraphEngine(db, { embedFn: countingEmbed });
+
+    eng.upsertEntity({ name: "X", type: "concept" });
+    expect(callCount).toBe(1);
+
+    eng.upsertEntity({ name: "Y", type: "concept" });
+    expect(callCount).toBe(2);
+  });
+
+  it("re-embeds pre-migration entities with no stored hash", () => {
+    let callCount = 0;
+    const countingEmbed: EmbedFn = (_text) => {
+      callCount++;
+      return [1, 0, 0];
+    };
+    const eng = new MemoryGraphEngine(db, { embedFn: countingEmbed });
+
+    // Create entity
+    eng.upsertEntity({ name: "A", type: "concept", summary: "hello" });
+    expect(callCount).toBe(1);
+
+    // Simulate pre-migration: clear content_hash
+    db.prepare(`UPDATE entities SET content_hash = NULL WHERE name = 'A'`).run();
+
+    // Same content but no stored hash → should re-embed
+    eng.upsertEntity({ name: "A", type: "concept", summary: "hello" });
+    expect(callCount).toBe(2);
   });
 });

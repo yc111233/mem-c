@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
   removeEntityFts,
@@ -171,13 +171,24 @@ export class MemoryGraphEngine {
       const now = Date.now();
 
       // Auto-generate embedding via hook if not provided
+      const newHash = computeContentHash(input.name, input.summary);
       let embedding = input.embedding;
       if (!embedding && this.embedFn) {
-        try {
-          const text = input.name + (input.summary ? " " + input.summary : "");
-          embedding = this.embedFn(text);
-        } catch {
-          // Non-fatal: entity is stored without embedding if hook fails
+        // Only re-embed if content actually changed
+        const existingHash = this.db
+          .prepare(`SELECT content_hash FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL LIMIT 1`)
+          .get(input.name, input.type) as { content_hash: string | null } | undefined;
+        const shouldReembed = !existingHash || existingHash.content_hash !== newHash;
+        if (shouldReembed) {
+          try {
+            const text = input.name + (input.summary ? " " + input.summary : "");
+            embedding = this.embedFn(text);
+          } catch {
+            // Non-fatal
+          }
+        } else {
+          // Content unchanged — keep existing embedding, skip embedFn
+          embedding = undefined;
         }
       }
       const embeddingBlob = embedding ? serializeEmbedding(embedding) : null;
@@ -206,7 +217,7 @@ export class MemoryGraphEngine {
         this.db
           .prepare(
             `UPDATE entities SET summary = COALESCE(?, summary), embedding = COALESCE(?, embedding), ` +
-              `confidence = ?, source = ?, updated_at = ? WHERE id = ?`,
+              `confidence = ?, source = ?, updated_at = ?, content_hash = ? WHERE id = ?`,
           )
           .run(
             input.summary ?? null,
@@ -214,6 +225,7 @@ export class MemoryGraphEngine {
             input.confidence ?? existing.confidence,
             input.source ?? existing.source,
             now,
+            newHash,
             existing.id,
           );
 
@@ -235,8 +247,8 @@ export class MemoryGraphEngine {
       const id = randomUUID();
       this.db
         .prepare(
-          `INSERT INTO entities (id, name, type, summary, embedding, confidence, source, valid_from, valid_until, created_at, updated_at) ` +
-            `VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+          `INSERT INTO entities (id, name, type, summary, embedding, confidence, source, valid_from, valid_until, created_at, updated_at, content_hash) ` +
+            `VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
         )
         .run(
           id,
@@ -249,6 +261,7 @@ export class MemoryGraphEngine {
           input.validFrom ?? now,
           now,
           now,
+          newHash,
         );
 
       // Register normalized alias
@@ -688,6 +701,11 @@ export function computeImportance(entity: Entity, edgeCount: number, now: number
       : 0;
 
   return 0.3 * recency + 0.3 * degree + 0.25 * accessScore + 0.15 * entity.confidence;
+}
+
+function computeContentHash(name: string, summary?: string | null): string {
+  const content = name + "\0" + (summary ?? "");
+  return createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
 
 function toEntity(row: EntityRow): Entity {

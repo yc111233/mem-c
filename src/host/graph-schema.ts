@@ -38,6 +38,7 @@ export type EntityRow = {
   updated_at: number;
   access_count: number;
   last_accessed_at: number;
+  content_hash: string | null;
 };
 
 export type EdgeRow = {
@@ -110,6 +111,9 @@ export function ensureGraphSchema(params: {
   // On fresh databases these columns already exist in CREATE TABLE; ALTER silently fails.
   try { db.exec(`ALTER TABLE entities ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE entities ADD COLUMN last_accessed_at INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
+
+  // Content hash for incremental embedding
+  try { db.exec(`ALTER TABLE entities ADD COLUMN content_hash TEXT`); } catch { /* already exists */ }
 
   // -- edges ------------------------------------------------------------------
   db.exec(`
