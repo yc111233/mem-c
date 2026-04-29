@@ -24,19 +24,33 @@ function findVecExtensionPath(): string | null {
   const pkgName = `sqlite-vec-${osName}-${arch}`;
   const fileName = `vec0.${suffix}`;
 
-  // Try to resolve from node_modules
-  try {
-    const require = createRequire(join(process.cwd(), "noop.js"));
-    const pkgDir = dirname(require.resolve(`${pkgName}/package.json`));
-    const fullPath = join(pkgDir, fileName);
-    if (existsSync(fullPath)) return fullPath;
-  } catch {
-    // Package not installed
-  }
+  // Try to resolve from the module's own location (works when cwd differs from package root)
+  const selfDir = dirname(new URL(import.meta.url).pathname);
 
-  // Fallback: check common paths
-  const candidate = join(process.cwd(), "node_modules", pkgName, fileName);
-  if (existsSync(candidate)) return candidate;
+  for (const baseDir of [selfDir, process.cwd()]) {
+    try {
+      const require = createRequire(join(baseDir, "noop.js"));
+      const pkgDir = dirname(require.resolve(`${pkgName}/package.json`));
+      const fullPath = join(pkgDir, fileName);
+      if (existsSync(fullPath)) return fullPath;
+    } catch {
+      // Try next
+    }
+
+    // Direct path fallback
+    const candidate = join(baseDir, "node_modules", pkgName, fileName);
+    if (existsSync(candidate)) return candidate;
+
+    // Walk up to find project root's node_modules
+    let dir = baseDir;
+    for (let i = 0; i < 5; i++) {
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+      const walkCandidate = join(dir, "node_modules", pkgName, fileName);
+      if (existsSync(walkCandidate)) return walkCandidate;
+    }
+  }
 
   return null;
 }
