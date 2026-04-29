@@ -136,7 +136,6 @@ export default {
     // Initialize database
     mkdirSync(dirname(cfg.dbPath), { recursive: true });
     const db = new DatabaseSync(cfg.dbPath);
-    const { entityFtsAvailable } = ensureGraphSchema({ db });
 
     // Lazy embedFn: delegates to host on each call so late registration works
     const lazyEmbedFn: EmbedFn | undefined = api.getEmbedFn
@@ -147,6 +146,7 @@ export default {
         }
       : undefined;
     const engine = new MemoryGraphEngine(db, lazyEmbedFn ? { embedFn: lazyEmbedFn } : undefined);
+    const { entityFtsAvailable } = ensureGraphSchema({ db, engine });
 
     if (!entityFtsAvailable) {
       api.logger.warn("memory-graph: FTS5 unavailable, falling back to LIKE search");

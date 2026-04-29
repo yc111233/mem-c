@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { deserializeEmbedding, type Entity, type Edge, type MemoryGraphEngine } from "./graph-engine.js";
 import { searchEntityFts } from "./graph-schema.js";
@@ -12,47 +13,70 @@ type CacheEntry = {
   timestamp: number;
 };
 
-const searchCache = new Map<string, CacheEntry>();
+let searchCache = new WeakMap<DatabaseSync, Map<string, CacheEntry>>();
 const DEFAULT_CACHE_MAX = 128;
 const DEFAULT_CACHE_TTL_MS = 30_000; // 30 seconds
+
+function getCacheBucket(db: DatabaseSync): Map<string, CacheEntry> {
+  const existing = searchCache.get(db);
+  if (existing) return existing;
+  const created = new Map<string, CacheEntry>();
+  searchCache.set(db, created);
+  return created;
+}
+
+function hashEmbedding(vec?: number[]): string {
+  if (!vec || vec.length === 0) return "";
+  return createHash("sha1")
+    .update(Buffer.from(new Float32Array(vec).buffer))
+    .digest("hex");
+}
 
 function makeCacheKey(query: string, opts?: GraphSearchOpts): string {
   const parts = [
     query,
     opts?.maxResults ?? 10,
     opts?.minScore ?? 0.1,
-    opts?.types?.join(",") ?? "",
+    [...(opts?.types ?? [])].sort().join(","),
     opts?.activeOnly ?? true,
+    opts?.includeEdges ?? true,
+    opts?.graphDepth ?? 1,
     opts?.vectorWeight ?? 0.5,
     opts?.ftsWeight ?? 0.3,
     opts?.graphWeight ?? 0.2,
     opts?.temporalDecayDays ?? 30,
     opts?.rerankFn ? "rerank" : "no-rerank",
+    hashEmbedding(opts?.queryEmbedding),
   ];
   return parts.join("\x00");
 }
 
-function cacheGet(key: string, ttlMs: number): GraphSearchResult[] | null {
-  const entry = searchCache.get(key);
+function cacheGet(db: DatabaseSync, key: string, ttlMs: number): GraphSearchResult[] | null {
+  const entry = searchCache.get(db)?.get(key);
   if (!entry) return null;
   if (Date.now() - entry.timestamp > ttlMs) {
-    searchCache.delete(key);
+    searchCache.get(db)?.delete(key);
     return null;
   }
   return entry.results;
 }
 
-function cacheSet(key: string, results: GraphSearchResult[]): void {
-  if (searchCache.size >= DEFAULT_CACHE_MAX) {
-    const oldest = searchCache.keys().next().value;
-    if (oldest !== undefined) searchCache.delete(oldest);
+function cacheSet(db: DatabaseSync, key: string, results: GraphSearchResult[]): void {
+  const bucket = getCacheBucket(db);
+  if (bucket.size >= DEFAULT_CACHE_MAX) {
+    const oldest = bucket.keys().next().value;
+    if (oldest !== undefined) bucket.delete(oldest);
   }
-  searchCache.set(key, { results, timestamp: Date.now() });
+  bucket.set(key, { results, timestamp: Date.now() });
 }
 
-/** Clear the search result cache. Called automatically on entity writes. */
-export function clearSearchCache(): void {
-  searchCache.clear();
+/** Clear the search result cache. Called automatically on entity and edge writes. */
+export function clearSearchCache(db?: DatabaseSync): void {
+  if (db) {
+    searchCache.delete(db);
+    return;
+  }
+  searchCache = new WeakMap<DatabaseSync, Map<string, CacheEntry>>();
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +143,7 @@ export async function searchGraph(
   // Check cache
   if (cacheTtlMs > 0) {
     const cacheKey = makeCacheKey(query, opts);
-    const cached = cacheGet(cacheKey, cacheTtlMs);
+    const cached = cacheGet(db, cacheKey, cacheTtlMs);
     if (cached) return cached;
   }
 
@@ -316,7 +340,7 @@ export async function searchGraph(
 
   if (cacheTtlMs > 0) {
     const cacheKey = makeCacheKey(query, opts);
-    cacheSet(cacheKey, finalResults);
+    cacheSet(db, cacheKey, finalResults);
   }
 
   return finalResults;

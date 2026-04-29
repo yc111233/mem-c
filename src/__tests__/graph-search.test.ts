@@ -187,6 +187,52 @@ describe("searchGraph", () => {
   // -------------------------------------------------------------------------
 
   describe("search cache", () => {
+    it("isolates cache entries per database", async () => {
+      const db2 = createTestDb();
+      const engine2 = new MemoryGraphEngine(db2);
+
+      engine.upsertEntity({ name: "Alpha", type: "concept", summary: "shared-term" });
+      engine2.upsertEntity({ name: "Beta", type: "concept", summary: "shared-term" });
+
+      const results1 = await searchGraph(db, engine, "shared-term", {
+        minScore: 0, vectorWeight: 0, ftsWeight: 1, graphWeight: 0,
+      });
+      const results2 = await searchGraph(db2, engine2, "shared-term", {
+        minScore: 0, vectorWeight: 0, ftsWeight: 1, graphWeight: 0,
+      });
+
+      expect(results1[0]!.entity.name).toBe("Alpha");
+      expect(results2[0]!.entity.name).toBe("Beta");
+      db2.close();
+    });
+
+    it("includes relation expansion options in the cache key", async () => {
+      const alice = engine.upsertEntity({ name: "Alice", type: "user", summary: "engineer" });
+      const project = engine.upsertEntity({ name: "ProjectX", type: "project", summary: "initiative" });
+      engine.addEdge({ fromId: alice.id, toId: project.id, relation: "works_on" });
+
+      const withoutEdges = await searchGraph(db, engine, "Alice", { minScore: 0, includeEdges: false });
+      const withEdges = await searchGraph(db, engine, "Alice", { minScore: 0, includeEdges: true });
+
+      expect(withoutEdges[0]!.edges).toHaveLength(0);
+      expect(withEdges[0]!.edges.length).toBeGreaterThan(0);
+    });
+
+    it("includes query embeddings in the cache key", async () => {
+      engine.upsertEntity({ name: "VectorA", type: "concept", embedding: [1.0, 0.0, 0.0] });
+      engine.upsertEntity({ name: "VectorB", type: "concept", embedding: [0.0, 1.0, 0.0] });
+
+      const resultsA = await searchGraph(db, engine, "semantic-query", {
+        queryEmbedding: [1.0, 0.0, 0.0], vectorWeight: 1.0, ftsWeight: 0.0, graphWeight: 0.0, minScore: 0,
+      });
+      const resultsB = await searchGraph(db, engine, "semantic-query", {
+        queryEmbedding: [0.0, 1.0, 0.0], vectorWeight: 1.0, ftsWeight: 0.0, graphWeight: 0.0, minScore: 0,
+      });
+
+      expect(resultsA[0]!.entity.name).toBe("VectorA");
+      expect(resultsB[0]!.entity.name).toBe("VectorB");
+    });
+
     it("returns cached results on repeated query", async () => {
       engine.upsertEntity({ name: "Cached", type: "concept", summary: "test cache" });
 
@@ -221,6 +267,23 @@ describe("searchGraph", () => {
 
       const results2 = await await searchGraph(db, engine, "TTL", { minScore: 0, cacheTtlMs: 50 });
       expect(results2.length).toBeGreaterThan(0);
+    });
+
+    it("invalidates cached graph results when edges change", async () => {
+      const alice = engine.upsertEntity({ name: "Alice", type: "user", summary: "engineer" });
+      const before = await searchGraph(db, engine, "Alice", {
+        minScore: 0, includeEdges: true, cacheTtlMs: 60_000,
+      });
+      expect(before[0]!.edges).toHaveLength(0);
+
+      const project = engine.upsertEntity({ name: "ProjectX", type: "project", summary: "initiative" });
+      engine.addEdge({ fromId: alice.id, toId: project.id, relation: "works_on" });
+
+      const after = await searchGraph(db, engine, "Alice", {
+        minScore: 0, includeEdges: true, cacheTtlMs: 60_000,
+      });
+      expect(after[0]!.edges.length).toBeGreaterThan(0);
+      expect(after[0]!.relatedNames).toContain("ProjectX");
     });
   });
 

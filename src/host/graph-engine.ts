@@ -284,7 +284,7 @@ export class MemoryGraphEngine {
         if (this._vecAvailable && embedding) {
           vecUpsert(this.db, updated.id, embedding, true);
         }
-        clearSearchCache();
+        clearSearchCache(this.db);
         const result = { ...toEntity(updated), isNew: false };
         this.events.emit("entity:updated", result);
         return result;
@@ -320,7 +320,7 @@ export class MemoryGraphEngine {
       if (this._vecAvailable && embedding) {
         vecUpsert(this.db, row.id, embedding, true);
       }
-      clearSearchCache();
+      clearSearchCache(this.db);
       const result = { ...toEntity(row), isNew: true };
       this.events.emit("entity:created", result);
       return result;
@@ -462,7 +462,7 @@ export class MemoryGraphEngine {
         .run(now, id, id);
 
       removeEntityFts(this.db, id);
-      clearSearchCache();
+      clearSearchCache(this.db);
 
       this.events.emit("entity:invalidated", id);
 
@@ -495,6 +495,7 @@ export class MemoryGraphEngine {
     this.db
       .prepare(`UPDATE entities SET confidence = ?, updated_at = ? WHERE id = ?`)
       .run(Math.max(0.1, confidence), now, id);
+    clearSearchCache(this.db);
   }
 
   /**
@@ -524,6 +525,7 @@ export class MemoryGraphEngine {
         `UPDATE edges SET valid_until = ? WHERE from_id = ? AND to_id = ? AND valid_until IS NULL`,
       )
       .run(now, toEntityId, toEntityId);
+    clearSearchCache(this.db);
     return count;
   }
 
@@ -586,6 +588,7 @@ export class MemoryGraphEngine {
           .prepare(`UPDATE edges SET weight = ?, metadata = COALESCE(?, metadata) WHERE id = ?`)
           .run(updatedWeight, metadataJson, existing.id);
         const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(existing.id) as EdgeRow;
+        clearSearchCache(this.db);
         const edgeResult = toEdge(row);
         this.events.emit("edge:updated", edgeResult);
         return edgeResult;
@@ -610,6 +613,7 @@ export class MemoryGraphEngine {
         );
 
       const row = this.db.prepare(`SELECT * FROM edges WHERE id = ?`).get(id) as EdgeRow;
+      clearSearchCache(this.db);
       const edgeResult = toEdge(row);
       this.events.emit("edge:created", edgeResult);
       return edgeResult;
@@ -631,6 +635,7 @@ export class MemoryGraphEngine {
     this.db
       .prepare(`UPDATE edges SET valid_until = ? WHERE id = ? AND valid_until IS NULL`)
       .run(now, id);
+    clearSearchCache(this.db);
   }
 
   findEdges(query: EdgeQuery): Edge[] {

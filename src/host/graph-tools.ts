@@ -53,9 +53,11 @@ export async function memoryGraphSearch(
   input: MemoryGraphSearchInput,
   queryEmbedding?: number[],
 ): Promise<MemoryGraphSearchOutput> {
+  const includeRelations = input.includeRelations !== false;
+  const compact = (input.compact ?? false) || !includeRelations;
   const l1 = await buildL1Context(db, engine, input.query, {
     maxResults: input.maxResults ?? 6,
-    compact: input.compact,
+    compact,
     queryEmbedding,
     types: input.types,
   });
@@ -65,7 +67,7 @@ export async function memoryGraphSearch(
     type: r.type,
     summary: r.summary || null,
     score: r.score,
-    relations: input.includeRelations !== false ? r.relations : [],
+    relations: includeRelations ? r.relations : [],
   }));
 
   // Touch top search results to track access frequency (lightweight name lookups)

@@ -102,6 +102,20 @@ describe("graph-tools", () => {
       }
     });
 
+    it("omits relations from formatted output when includeRelations is false", async () => {
+      const alice = engine.upsertEntity({ name: "Alice", type: "user", summary: "engineer", embedding: [1.0, 0.0, 0.0] });
+      const project = engine.upsertEntity({ name: "ProjectX", type: "project", summary: "initiative", embedding: [0.0, 1.0, 0.0] });
+      engine.addEdge({ fromId: alice.id, toId: project.id, relation: "works_on" });
+
+      const result = await memoryGraphSearch(db, engine, {
+        query: "semantic-query", includeRelations: false,
+      }, [1.0, 0.0, 0.0]);
+
+      expect(result.results[0]!.relations).toEqual([]);
+      expect(result.formatted).not.toContain("works_on");
+      expect(result.formatted).not.toContain("Relations:");
+    });
+
     it("tracks access on search hit", () => {
       const entity = engine.upsertEntity({ name: "React", type: "concept", summary: "UI lib" });
       expect(entity.access_count).toBe(0);
