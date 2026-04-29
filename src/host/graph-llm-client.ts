@@ -133,7 +133,7 @@ async function embedTextsDashScope(
   const url = `${config.baseUrl}/services/embeddings/multimodal-embedding/multimodal-embedding`;
   const body: Record<string, unknown> = {
     model: config.model,
-    input: { texts },
+    input: { contents: texts.map((t) => ({ text: t })) },
     parameters: config.dimensions ? { dimension: config.dimensions } : {},
   };
 
