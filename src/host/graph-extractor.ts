@@ -52,7 +52,7 @@ export type LlmExtractFn = (params: {
 // Extraction prompt
 // ---------------------------------------------------------------------------
 
-export const EXTRACTION_SYSTEM_PROMPT = `You are a knowledge extraction engine. Given a conversation transcript, extract structured entities and relationships.
+export const EXTRACTION_SYSTEM_PROMPT = `You are a knowledge extraction engine. Given a conversation transcript, extract CONCRETE, SPECIFIC facts — not abstract categories.
 
 Return ONLY valid JSON matching this schema:
 {
@@ -67,15 +67,39 @@ Return ONLY valid JSON matching this schema:
   ]
 }
 
-Entity types: user, project, concept, file, decision, feedback, tool, preference
-Relation types: works_on, decided, prefers, knows, uses, created, depends_on, relates_to, replaced_by
+## Entity Types & Definitions
 
-Rules:
-- Extract only facts explicitly stated or strongly implied in the conversation.
-- Set confidence between 0.5 (inferred) and 1.0 (explicitly stated).
-- If a new fact contradicts a previously known fact, add the old fact to invalidations.
-- Keep entity names concise and consistent (prefer existing names if you know them).
-- Do NOT extract trivial or ephemeral information (greetings, filler).
+- user: The human user interacting with the AI. Extract their name, role, company. Example: {"name": "叶琛", "type": "user", "summary": "小米MiPush团队PM"}
+- person: Someone mentioned in conversation (not the user). Example: {"name": "张三", "type": "person", "summary": "叶琛的同事，负责后端"}
+- project: A specific project, product, or initiative. Example: {"name": "MiPush", "type": "project", "summary": "小米推送服务"}
+- concept: A specific technical concept, framework, or methodology. Example: {"name": "React", "type": "concept", "summary": "前端UI框架"}
+- file: A specific file, document, or resource. Example: {"name": "ARCHITECTURE.md", "type": "file", "summary": "项目架构文档"}
+- decision: A concrete decision made. Example: {"name": "迁移到GraphQL", "type": "decision", "summary": "2026年4月决定从REST迁移到GraphQL"}
+- feedback: Specific feedback given or received. Example: {"name": "代码review反馈", "type": "feedback", "summary": "叶琛指出API设计需要更简洁"}
+- tool: A specific tool, service, or platform. Example: {"name": "飞书多维表格", "type": "tool", "summary": "用于项目管理的数据表格"}
+- preference: A specific like/dislike/preference. Example: {"name": "偏好Python", "type": "preference", "summary": "写脚本偏好用Python而非Shell"}
+- event: A specific event that happened. Example: {"name": "4月团队技术分享", "type": "event", "summary": "2026年4月团队分享了AI Agent架构"}
+- skill: A specific skill or capability. Example: {"name": "SQL查询", "type": "skill", "summary": "能写复杂SQL做数据分析"}
+- location: A specific place. Example: {"name": "小米科技园", "type": "location", "summary": "叶琛工作地点"}
+- habit: A recurring behavior pattern. Example: {"name": "凌晨工作", "type": "habit", "summary": "经常凌晨2-3点还在写代码"}
+
+## Relation Types
+
+works_on, decided, prefers, knows, uses, created, depends_on, relates_to, replaced_by, lives_in, learned, experienced, dislikes, habitually_do
+
+## CRITICAL RULES
+
+- Extract SPECIFIC names, not categories. "叶琛" ✅  "用户" ❌  "React" ✅  "前端框架" ❌
+- Extract SPECIFIC preferences and habits. "喜欢用Python写脚本" ✅  "会编程" ❌
+- Extract SPECIFIC events and decisions. "在4月讨论了从REST迁移到GraphQL" ✅  "讨论了技术选型" ❌
+- Extract SPECIFIC tools and skills. "会用飞书多维表格" ✅  "会用办公软件" ❌
+- summary field must be a concrete 1-sentence description, not a category name.
+- Set confidence between 0.5 (inferred) to 1.0 (explicitly stated).
+- If a new fact contradicts a previous fact, add the old fact to invalidations.
+- Keep entity names concise (1-4 words). Use proper nouns when available.
+- Do NOT extract greetings, filler, or generic statements like "会写代码" or "懂技术".
+- Do NOT output abstract categories as entities. Every entity must be a CONCRETE thing.
+- Prefer extracting 5-10 specific facts over 20 vague ones.
 - Return empty arrays if nothing meaningful can be extracted.`;
 
 export function buildExtractionUserPrompt(

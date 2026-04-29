@@ -9,6 +9,7 @@ import { ensureVecIndex, vecSyncAll } from "./graph-vec.js";
  */
 export type EntityType =
   | "user"
+  | "person"
   | "project"
   | "concept"
   | "file"
@@ -16,6 +17,10 @@ export type EntityType =
   | "feedback"
   | "tool"
   | "preference"
+  | "event"
+  | "skill"
+  | "location"
+  | "habit"
   | (string & {});
 
 export type EntitySource = "auto" | "manual" | "imported";
