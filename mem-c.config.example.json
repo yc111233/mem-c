@@ -1,0 +1,21 @@
+{
+  "chat": {
+    "provider": "openai-compatible",
+    "baseUrl": "https://api.llm.mioffice.cn/v1",
+    "apiKey": "sk-your-mify-key",
+    "model": "xiaomi/mimo-v2.5-pro"
+  },
+  "embedding": {
+    "provider": "openai-compatible",
+    "baseUrl": "https://api.llm.mioffice.cn/v1",
+    "apiKey": "sk-your-mify-key",
+    "model": "text-embedding-3-small",
+    "dimensions": 1536
+  },
+  "rerank": {
+    "provider": "dashscope",
+    "apiKey": "sk-your-dashscope-key",
+    "model": "gte-rerank-v2",
+    "topN": 10
+  }
+}

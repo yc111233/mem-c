@@ -80,23 +80,23 @@ describe("graph-tools", () => {
   // -------------------------------------------------------------------------
 
   describe("memoryGraphSearch", () => {
-    it("returns formatted results", () => {
+    it("returns formatted results", async () => {
       engine.upsertEntity({ name: "React", type: "concept", summary: "UI lib" });
       engine.upsertEntity({ name: "Vue", type: "concept", summary: "Progressive framework" });
 
       // memoryGraphSearch uses L1 context which calls searchGraph internally
       // With few documents, FTS BM25 scores are tiny — use LIKE-friendly query
-      const result = memoryGraphSearch(db, engine, { query: "React" });
+      const result = await memoryGraphSearch(db, engine, { query: "React" });
       // With small corpus, scores may be below default minScore. Verify no crash.
       expect(Array.isArray(result.results)).toBe(true);
       expect(typeof result.formatted).toBe("string");
     });
 
-    it("filters by type", () => {
+    it("filters by type", async () => {
       engine.upsertEntity({ name: "Alice", type: "user" });
       engine.upsertEntity({ name: "Alice", type: "concept" });
 
-      const result = memoryGraphSearch(db, engine, { query: "Alice", types: ["user"] });
+      const result = await memoryGraphSearch(db, engine, { query: "Alice", types: ["user"] });
       for (const r of result.results) {
         expect(r.type).toBe("user");
       }

@@ -129,6 +129,8 @@ export type FindPathsOpts = {
 
 export type MemoryGraphEngineOpts = {
   embedFn?: EmbedFn;
+  /** Async embedding function (for modelConfig-based embedding). Takes priority over sync embedFn. */
+  asyncEmbedFn?: (text: string) => Promise<number[]>;
   namespace?: string;
 };
 
@@ -143,11 +145,13 @@ export type EntityVersion = {
 
 export class MemoryGraphEngine {
   private readonly embedFn?: EmbedFn;
+  private readonly asyncEmbedFn?: (text: string) => Promise<number[]>;
   private readonly namespace: string | null;
   private readonly events = new GraphEventEmitter();
 
   constructor(private readonly db: DatabaseSync, opts?: MemoryGraphEngineOpts) {
     this.embedFn = opts?.embedFn;
+    this.asyncEmbedFn = opts?.asyncEmbedFn;
     this.namespace = opts?.namespace ?? null;
   }
 
@@ -159,6 +163,11 @@ export class MemoryGraphEngine {
   /** Get the configured embedding function, if any. */
   getEmbedFn(): EmbedFn | undefined {
     return this.embedFn;
+  }
+
+  /** Get the configured async embedding function, if any. */
+  getAsyncEmbedFn(): ((text: string) => Promise<number[]>) | undefined {
+    return this.asyncEmbedFn;
   }
 
   /** Get the event emitter for subscribing to graph lifecycle events. */
@@ -316,6 +325,34 @@ export class MemoryGraphEngine {
       this.events.emit("entity:created", result);
       return result;
     });
+  }
+
+  /**
+   * Async variant of upsertEntity that supports async embedding.
+   * Pre-computes embedding via asyncEmbedFn, then delegates to sync upsertEntity.
+   */
+  async asyncUpsertEntity(input: EntityInput): Promise<Entity & { isNew: boolean }> {
+    if (!input.embedding && this.asyncEmbedFn) {
+      const newHash = computeContentHash(input.name, input.summary);
+      const existingHash = this.db
+        .prepare(
+          `SELECT content_hash FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL AND (namespace = ? OR (namespace IS NULL AND ? IS NULL)) LIMIT 1`,
+        )
+        .get(input.name, input.type, this.namespace, this.namespace) as
+        | { content_hash: string | null }
+        | undefined;
+
+      const shouldReembed = !existingHash || existingHash.content_hash !== newHash;
+      if (shouldReembed) {
+        try {
+          const text = input.name + (input.summary ? " " + input.summary : "");
+          input = { ...input, embedding: await this.asyncEmbedFn(text) };
+        } catch {
+          // Non-fatal: proceed without embedding
+        }
+      }
+    }
+    return this.upsertEntity(input);
   }
 
   getEntity(id: string): Entity | null {

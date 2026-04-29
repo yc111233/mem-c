@@ -47,13 +47,13 @@ export type MemoryGraphSearchOutput = {
   formatted: string;
 };
 
-export function memoryGraphSearch(
+export async function memoryGraphSearch(
   db: DatabaseSync,
   engine: MemoryGraphEngine,
   input: MemoryGraphSearchInput,
   queryEmbedding?: number[],
-): MemoryGraphSearchOutput {
-  const l1 = buildL1Context(db, engine, input.query, {
+): Promise<MemoryGraphSearchOutput> {
+  const l1 = await buildL1Context(db, engine, input.query, {
     maxResults: input.maxResults ?? 6,
     compact: input.compact,
     queryEmbedding,

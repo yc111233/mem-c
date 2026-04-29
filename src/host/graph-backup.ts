@@ -175,8 +175,9 @@ export function restoreBackup(
     // Restore entities
     for (const entity of data.entities) {
       try {
-        // Point-in-time filter: skip entities not yet valid at the target time
-        if (pointInTime && entity.created_at > pointInTime) {
+        // Point-in-time filter: skip entities not yet created at the target time,
+        // AND skip entities that were already invalidated before the target time
+        if (pointInTime && (entity.created_at > pointInTime || (entity.valid_until !== null && entity.valid_until < pointInTime))) {
           result.skipped++;
           continue;
         }
@@ -223,7 +224,7 @@ export function restoreBackup(
     // Restore edges
     for (const edge of data.edges) {
       try {
-        if (pointInTime && edge.created_at > pointInTime) {
+        if (pointInTime && (edge.created_at > pointInTime || (edge.valid_until !== null && edge.valid_until < pointInTime))) {
           result.skipped++;
           continue;
         }

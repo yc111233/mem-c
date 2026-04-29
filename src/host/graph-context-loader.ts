@@ -172,12 +172,12 @@ export function formatL0AsPromptSection(l0: L0Context): string {
  *
  * Falls back to pure recency (same as `buildL0Context`) when query is empty.
  */
-export function buildQueryAwareL0Context(
+export async function buildQueryAwareL0Context(
   db: DatabaseSync,
   engine: MemoryGraphEngine,
   query: string,
   opts?: { maxEntities?: number; maxTokens?: number; queryEmbedding?: number[]; useImportance?: boolean },
-): L0Context {
+): Promise<L0Context> {
   const maxEntities = opts?.maxEntities ?? 50;
   const maxTokens = opts?.maxTokens ?? 200;
 
@@ -187,7 +187,7 @@ export function buildQueryAwareL0Context(
   }
 
   // Part 1: query-relevant entities via lightweight search (no edges)
-  const searchResults = searchGraph(db, engine, query, {
+  const searchResults = await searchGraph(db, engine, query, {
     maxResults: Math.min(maxEntities, 10),
     includeEdges: false,
     queryEmbedding: opts?.queryEmbedding,
@@ -235,7 +235,7 @@ export function buildQueryAwareL0Context(
 // L1: Search-triggered context
 // ---------------------------------------------------------------------------
 
-export function buildL1Context(
+export async function buildL1Context(
   db: DatabaseSync,
   engine: MemoryGraphEngine,
   query: string,
@@ -247,12 +247,12 @@ export function buildL1Context(
     queryEmbedding?: number[];
     types?: string[];
   },
-): L1Context {
+): Promise<L1Context> {
   const maxResults = opts?.maxResults ?? 6;
   const maxTokens = opts?.maxTokens ?? 800;
   const compact = opts?.compact ?? false;
 
-  const searchResults = searchGraph(db, engine, query, {
+  const searchResults = await searchGraph(db, engine, query, {
     maxResults: maxResults * 2, // over-fetch for token budget trimming
     includeEdges: !compact,
     queryEmbedding: opts?.queryEmbedding,

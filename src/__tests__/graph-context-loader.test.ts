@@ -36,7 +36,7 @@ function seedEntities(engine: MemoryGraphEngine) {
 // ---------------------------------------------------------------------------
 
 describe("suggestBudgets", () => {
-  it("returns standard budgets when comfortable (>=3000)", () => {
+  it("returns standard budgets when comfortable (>=3000)", async () => {
     const b = suggestBudgets(3000);
     expect(b).toEqual({ l0: 200, l1: 800, l2: 2000 });
 
@@ -44,7 +44,7 @@ describe("suggestBudgets", () => {
     expect(b2).toEqual({ l0: 200, l1: 800, l2: 2000 });
   });
 
-  it("returns compressed budgets when tight (500-2999)", () => {
+  it("returns compressed budgets when tight (500-2999)", async () => {
     const b = suggestBudgets(1000);
     expect(b.l0).toBeLessThanOrEqual(100);
     expect(b.l1).toBeLessThanOrEqual(400);
@@ -54,14 +54,14 @@ describe("suggestBudgets", () => {
     expect(b.l2).toBeGreaterThan(0);
   });
 
-  it("returns minimal budgets when extreme (<500)", () => {
+  it("returns minimal budgets when extreme (<500)", async () => {
     const b = suggestBudgets(100);
     expect(b.l0).toBeLessThanOrEqual(50);
     expect(b.l1).toBe(50); // 100 - 50
     expect(b.l2).toBe(0);
   });
 
-  it("handles zero budget", () => {
+  it("handles zero budget", async () => {
     const b = suggestBudgets(0);
     expect(b.l0).toBe(0);
     expect(b.l1).toBe(0);
@@ -82,13 +82,13 @@ describe("buildL0Context", () => {
     db.close();
   });
 
-  it("returns empty entries when no entities exist", () => {
+  it("returns empty entries when no entities exist", async () => {
     const l0 = buildL0Context(engine);
     expect(l0.tier).toBe("L0");
     expect(l0.entries).toHaveLength(0);
   });
 
-  it("returns entity roster with all seeded entities", () => {
+  it("returns entity roster with all seeded entities", async () => {
     seedEntities(engine);
     const l0 = buildL0Context(engine, { maxTokens: 500 });
     expect(l0.entries.length).toBe(5);
@@ -99,13 +99,13 @@ describe("buildL0Context", () => {
     expect(joined).toContain("TypeScript");
   });
 
-  it("respects maxEntities limit", () => {
+  it("respects maxEntities limit", async () => {
     seedEntities(engine);
     const l0 = buildL0Context(engine, { maxEntities: 2, maxTokens: 500 });
     expect(l0.entries.length).toBeLessThanOrEqual(2);
   });
 
-  it("respects maxTokens budget", () => {
+  it("respects maxTokens budget", async () => {
     seedEntities(engine);
     const l0 = buildL0Context(engine, { maxTokens: 30 });
     // Very tight budget — should include fewer entities
@@ -127,8 +127,8 @@ describe("buildQueryAwareL0Context", () => {
     db.close();
   });
 
-  it("falls back to recency-only when query is empty", () => {
-    const l0 = buildQueryAwareL0Context(db, engine, "", { maxTokens: 500 });
+  it("falls back to recency-only when query is empty", async () => {
+    const l0 = await buildQueryAwareL0Context(db, engine, "", { maxTokens: 500 });
     expect(l0.tier).toBe("L0");
     expect(l0.entries.length).toBeGreaterThan(0);
     // Should be same as buildL0Context
@@ -136,8 +136,8 @@ describe("buildQueryAwareL0Context", () => {
     expect(l0.entries).toEqual(l0Plain.entries);
   });
 
-  it("prioritizes query-relevant entities", () => {
-    const l0 = buildQueryAwareL0Context(db, engine, "React JavaScript", {
+  it("prioritizes query-relevant entities", async () => {
+    const l0 = await buildQueryAwareL0Context(db, engine, "React JavaScript", {
       maxTokens: 500,
     });
     expect(l0.entries.length).toBeGreaterThan(0);
@@ -146,8 +146,8 @@ describe("buildQueryAwareL0Context", () => {
     expect(hasReact).toBe(true);
   });
 
-  it("backfills with recency after relevant entities", () => {
-    const l0 = buildQueryAwareL0Context(db, engine, "React", {
+  it("backfills with recency after relevant entities", async () => {
+    const l0 = await buildQueryAwareL0Context(db, engine, "React", {
       maxTokens: 500,
     });
     // Should contain more than just React — backfill with others
@@ -174,8 +174,8 @@ describe("buildL1Context — compact mode", () => {
     db.close();
   });
 
-  it("includes relations in normal mode", () => {
-    const l1 = buildL1Context(db, engine, "React", { compact: false, maxTokens: 2000 });
+  it("includes relations in normal mode", async () => {
+    const l1 = await buildL1Context(db, engine, "React", { compact: false, maxTokens: 2000 });
     if (l1.results.length > 0) {
       const formatted = formatL1AsSearchContext(l1);
       // Non-compact should potentially include relation info
@@ -183,8 +183,8 @@ describe("buildL1Context — compact mode", () => {
     }
   });
 
-  it("omits relations in compact mode", () => {
-    const l1 = buildL1Context(db, engine, "React", { compact: true, maxTokens: 2000 });
+  it("omits relations in compact mode", async () => {
+    const l1 = await buildL1Context(db, engine, "React", { compact: true, maxTokens: 2000 });
     for (const r of l1.results) {
       expect(r.relations).toEqual([]);
     }
@@ -218,7 +218,7 @@ describe("buildL2Context — detailLevel", () => {
     db.close();
   });
 
-  it("full detail includes edges", () => {
+  it("full detail includes edges", async () => {
     const l2 = buildL2Context(engine, entityId, { detailLevel: "full" });
     expect(l2).not.toBeNull();
     expect(l2!.tier).toBe("L2");
@@ -226,7 +226,7 @@ describe("buildL2Context — detailLevel", () => {
     expect(l2!.entity.name).toBe("React");
   });
 
-  it("summary detail includes edges but no episodes/history", () => {
+  it("summary detail includes edges but no episodes/history", async () => {
     const l2 = buildL2Context(engine, entityId, { detailLevel: "summary" });
     expect(l2).not.toBeNull();
     expect(l2!.edges.length).toBeGreaterThan(0);
@@ -234,7 +234,7 @@ describe("buildL2Context — detailLevel", () => {
     expect(l2!.entity.history).toHaveLength(0);
   });
 
-  it("minimal detail has no edges, no episodes, no history", () => {
+  it("minimal detail has no edges, no episodes, no history", async () => {
     const l2 = buildL2Context(engine, entityId, { detailLevel: "minimal" });
     expect(l2).not.toBeNull();
     expect(l2!.edges).toHaveLength(0);
@@ -243,7 +243,7 @@ describe("buildL2Context — detailLevel", () => {
     expect(l2!.entity.summary).toBe("A JavaScript UI library");
   });
 
-  it("returns null for non-existent entity", () => {
+  it("returns null for non-existent entity", async () => {
     const l2 = buildL2Context(engine, "nonexistent-id");
     expect(l2).toBeNull();
   });
@@ -263,7 +263,7 @@ describe("buildL0Context — importance mode", () => {
     db.close();
   });
 
-  it("uses importance scoring when useImportance is true", () => {
+  it("uses importance scoring when useImportance is true", async () => {
     // Touch React multiple times to boost its importance
     const entities = engine.getActiveEntities();
     const react = entities.find((e) => e.name === "React")!;
@@ -278,19 +278,19 @@ describe("buildL0Context — importance mode", () => {
     expect(hasReact).toBe(true);
   });
 
-  it("falls back to recency when useImportance is false", () => {
+  it("falls back to recency when useImportance is false", async () => {
     const l0 = buildL0Context(engine, { maxTokens: 500, useImportance: false });
     expect(l0.entries.length).toBeGreaterThan(0);
   });
 });
 
 describe("format functions", () => {
-  it("formatL0AsPromptSection returns empty for no entries", () => {
+  it("formatL0AsPromptSection returns empty for no entries", async () => {
     const result = formatL0AsPromptSection({ tier: "L0", entries: [], estimatedTokens: 0 });
     expect(result).toBe("");
   });
 
-  it("formatL0AsPromptSection includes header", () => {
+  it("formatL0AsPromptSection includes header", async () => {
     const result = formatL0AsPromptSection({
       tier: "L0",
       entries: ["- React (concept)"],

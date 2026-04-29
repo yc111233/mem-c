@@ -51,7 +51,7 @@ export function createMemoryMcpServer(opts?: McpServerOpts): {
     "Search the knowledge graph for relevant entities and relationships",
     { query: z.string(), types: z.array(z.string()).optional(), maxResults: z.number().optional() },
     async (params) => {
-      const result = memoryGraphSearch(db, engine, params);
+      const result = await memoryGraphSearch(db, engine, params);
       return { content: [{ type: "text" as const, text: result.formatted }] };
     },
   );

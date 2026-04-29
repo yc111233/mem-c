@@ -27,6 +27,7 @@ function makeCacheKey(query: string, opts?: GraphSearchOpts): string {
     opts?.ftsWeight ?? 0.3,
     opts?.graphWeight ?? 0.2,
     opts?.temporalDecayDays ?? 30,
+    opts?.rerankFn ? "rerank" : "no-rerank",
   ];
   return parts.join("\x00");
 }
@@ -83,6 +84,8 @@ export type GraphSearchOpts = {
   queryEmbedding?: number[];
   /** Cache TTL in ms. 0 = no cache. Default 30000 (30s). */
   cacheTtlMs?: number;
+  /** Rerank function for search result reordering. */
+  rerankFn?: (query: string, documents: string[]) => Promise<Array<{ index: number; score: number }>>;
 };
 
 export type GraphSearchResult = {
@@ -105,12 +108,12 @@ export type GraphSearchResult = {
 // Hybrid graph search
 // ---------------------------------------------------------------------------
 
-export function searchGraph(
+export async function searchGraph(
   db: DatabaseSync,
   engine: MemoryGraphEngine,
   query: string,
   opts?: GraphSearchOpts,
-): GraphSearchResult[] {
+): Promise<GraphSearchResult[]> {
   const cacheTtlMs = opts?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
 
   // Check cache
@@ -132,12 +135,20 @@ export function searchGraph(
   // Auto-generate query embedding via engine's embedFn if not provided
   let queryEmbedding = opts?.queryEmbedding;
   if (!queryEmbedding && query.trim()) {
-    const embedFn = engine.getEmbedFn();
-    if (embedFn) {
+    // Prefer sync embedFn, fall back to async
+    const syncEmbed = engine.getEmbedFn();
+    const asyncEmbed = engine.getAsyncEmbedFn();
+    if (syncEmbed) {
       try {
-        queryEmbedding = embedFn(query);
+        queryEmbedding = syncEmbed(query);
       } catch {
         // Non-fatal: fall back to FTS-only search
+      }
+    } else if (asyncEmbed) {
+      try {
+        queryEmbedding = await asyncEmbed(query);
+      } catch {
+        // Non-fatal
       }
     }
   }
@@ -273,7 +284,35 @@ export function searchGraph(
   results.sort((a, b) => b.score - a.score);
 
   // MMR-style diversity: avoid returning too many entities of the same type
-  const finalResults = applyDiversityFilter(results, maxResults);
+  let finalResults = applyDiversityFilter(results, maxResults);
+
+  // Optional rerank step
+  if (opts?.rerankFn && finalResults.length > 1) {
+    try {
+      const documents = finalResults.map(
+        (r) => `${r.entity.name}: ${r.entity.summary ?? r.entity.type}`,
+      );
+      const reranked = await opts.rerankFn(query, documents);
+      if (reranked.length > 0) {
+        const rerankedResults: GraphSearchResult[] = [];
+        for (const item of reranked) {
+          if (item.index >= 0 && item.index < finalResults.length) {
+            const original = finalResults[item.index]!;
+            rerankedResults.push({
+              ...original,
+              score: item.score,
+            });
+          }
+        }
+        // Only use reranked results if we got a reasonable number back
+        if (rerankedResults.length >= Math.ceil(finalResults.length * 0.5)) {
+          finalResults = rerankedResults;
+        }
+      }
+    } catch {
+      // Rerank failure is non-fatal; use original ordering
+    }
+  }
 
   if (cacheTtlMs > 0) {
     const cacheKey = makeCacheKey(query, opts);

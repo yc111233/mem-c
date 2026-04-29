@@ -300,21 +300,21 @@ describe("searchGraph", () => {
     db.close();
   });
 
-  it("finds entities via FTS", () => {
+  it("finds entities via FTS", async () => {
     engine.upsertEntity({ name: "React Hooks", type: "concept", summary: "useState and useEffect" });
     engine.upsertEntity({ name: "Vue Composition", type: "concept", summary: "ref and computed" });
 
-    const results = searchGraph(db, engine, "React", { minScore: 0 });
+    const results = await searchGraph(db, engine, "React", { minScore: 0 });
     expect(results.length).toBeGreaterThanOrEqual(1);
     expect(results[0]!.entity.name).toBe("React Hooks");
   });
 
-  it("includes edges in results", () => {
+  it("includes edges in results", async () => {
     const react = engine.upsertEntity({ name: "React", type: "concept" });
     const hooks = engine.upsertEntity({ name: "Hooks", type: "concept" });
     engine.addEdge({ fromId: react.id, toId: hooks.id, relation: "has_feature" });
 
-    const results = searchGraph(db, engine, "React", {
+    const results = await searchGraph(db, engine, "React", {
       includeEdges: true,
       minScore: 0,
     });
@@ -324,11 +324,11 @@ describe("searchGraph", () => {
     expect(reactResult?.relatedNames).toContain("Hooks");
   });
 
-  it("filters by entity type", () => {
+  it("filters by entity type", async () => {
     engine.upsertEntity({ name: "React", type: "concept" });
     engine.upsertEntity({ name: "React", type: "file" });
 
-    const results = searchGraph(db, engine, "React", {
+    const results = await searchGraph(db, engine, "React", {
       types: ["concept"],
       minScore: 0,
     });
@@ -336,15 +336,15 @@ describe("searchGraph", () => {
     expect(results[0]!.entity.type).toBe("concept");
   });
 
-  it("excludes invalidated entities by default", () => {
+  it("excludes invalidated entities by default", async () => {
     const entity = engine.upsertEntity({ name: "Deprecated API", type: "concept" });
     engine.invalidateEntity(entity.id);
 
-    const results = searchGraph(db, engine, "Deprecated", { minScore: 0 });
+    const results = await searchGraph(db, engine, "Deprecated", { minScore: 0 });
     expect(results).toHaveLength(0);
   });
 
-  it("applies temporal decay", () => {
+  it("applies temporal decay", async () => {
     // Create two entities with different update times
     const recent = engine.upsertEntity({ name: "Fresh Info", type: "concept", summary: "fresh" });
     const old = engine.upsertEntity({ name: "Old Info", type: "concept", summary: "old" });
@@ -355,7 +355,7 @@ describe("searchGraph", () => {
       old.id,
     );
 
-    const results = searchGraph(db, engine, "Info", {
+    const results = await searchGraph(db, engine, "Info", {
       temporalDecayDays: 30,
       minScore: 0,
     });
@@ -371,17 +371,17 @@ describe("searchGraph", () => {
     }
   });
 
-  it("falls back to LIKE search when FTS and vector have no results", () => {
+  it("falls back to LIKE search when FTS and vector have no results", async () => {
     engine.upsertEntity({ name: "MySpecialComponent", type: "concept" });
 
-    const results = searchGraph(db, engine, "Special", { minScore: 0 });
+    const results = await searchGraph(db, engine, "Special", { minScore: 0 });
     expect(results.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("returns empty for no matches", () => {
+  it("returns empty for no matches", async () => {
     engine.upsertEntity({ name: "React", type: "concept" });
 
-    const results = searchGraph(db, engine, "xyznonexistent123", { minScore: 0.5 });
+    const results = await searchGraph(db, engine, "xyznonexistent123", { minScore: 0.5 });
     expect(results).toHaveLength(0);
   });
 });

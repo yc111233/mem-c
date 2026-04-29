@@ -180,7 +180,7 @@ export default {
         },
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           const input = params as { query: string; types?: string[]; maxResults?: number; includeRelations?: boolean };
-          const result = memoryGraphSearch(db, engine, {
+          const result = await memoryGraphSearch(db, engine, {
             query: input.query,
             types: input.types,
             maxResults: input.maxResults ?? cfg.searchMaxResults,

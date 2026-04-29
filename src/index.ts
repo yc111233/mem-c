@@ -225,3 +225,37 @@ export {
   startRestServer,
   type RestServerOpts,
 } from "./host/graph-rest.js";
+
+// Model configuration
+export {
+  loadConfig,
+  validateConfig,
+  getRerankUrl,
+  type ModelProvider,
+  type ModelProviderConfig,
+  type MemcModelConfig,
+  type ConfigValidation,
+} from "./host/graph-model-config.js";
+
+// LLM HTTP client
+export {
+  chatCompletion,
+  embedTexts,
+  rerankDocuments,
+  type ChatMessage as LlmChatMessage,
+  type RerankResult,
+} from "./host/graph-llm-client.js";
+
+// Model adapters (config → callbacks)
+export {
+  createLlmExtractFn,
+  createInferRelationFn,
+  createSummarizeFn,
+  createEmbedFn,
+  createAsyncEmbedFn,
+  createBatchEmbedFn,
+  createRerankFn,
+  createAllAdapters,
+  type RerankFn,
+  type ModelAdapters,
+} from "./host/graph-model-adapters.js";

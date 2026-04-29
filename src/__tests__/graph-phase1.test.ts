@@ -258,7 +258,7 @@ describe("EmbedFn hook", () => {
     expect(engine.getEmbedFn()).toBeUndefined();
   });
 
-  it("auto-generates query embedding in searchGraph", () => {
+  it("auto-generates query embedding in searchGraph", async () => {
     const mockEmbed: EmbedFn = (text: string) => {
       // Simple embedding: normalize first 3 char codes
       const codes = [0, 0, 0];
@@ -275,7 +275,7 @@ describe("EmbedFn hook", () => {
     engine.upsertEntity({ name: "Beta", type: "concept", summary: "Second item" });
 
     // Search without explicit queryEmbedding — should use embedFn
-    const results = searchGraph(db, engine, "Alpha");
+    const results = await searchGraph(db, engine, "Alpha");
     // Should return results (FTS + vector combined)
     expect(results.length).toBeGreaterThan(0);
   });
@@ -360,7 +360,7 @@ describe("Vector search path", () => {
   });
   afterEach(() => db.close());
 
-  it("ranks entities by cosine similarity", () => {
+  it("ranks entities by cosine similarity", async () => {
     // Create entities with known embeddings
     engine.upsertEntity({
       name: "Close",
@@ -379,7 +379,7 @@ describe("Vector search path", () => {
     });
 
     // Query embedding close to "Close"
-    const results = searchGraph(db, engine, "test", {
+    const results = await searchGraph(db, engine, "test", {
       queryEmbedding: [1.0, 0.0, 0.0],
       vectorWeight: 1.0,
       ftsWeight: 0.0,
@@ -393,10 +393,10 @@ describe("Vector search path", () => {
     expect(results[0]!.scoreBreakdown.vector).toBeCloseTo(1.0, 2);
   });
 
-  it("handles empty embedding gracefully", () => {
+  it("handles empty embedding gracefully", async () => {
     engine.upsertEntity({ name: "NoEmbed", type: "concept" });
 
-    const results = searchGraph(db, engine, "test", {
+    const results = await searchGraph(db, engine, "test", {
       queryEmbedding: [1.0, 0.0],
     });
     // Should not crash, may return 0 or more results

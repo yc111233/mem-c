@@ -21,20 +21,20 @@ describe("searchGraph", () => {
   // FTS path
   // -------------------------------------------------------------------------
 
-  it("finds entities via FTS", () => {
+  it("finds entities via FTS", async () => {
     engine.upsertEntity({ name: "React", type: "concept", summary: "UI library" });
     engine.upsertEntity({ name: "Vue", type: "concept", summary: "Progressive framework" });
 
     // Use low minScore since BM25 scores are very small with few documents
-    const results = searchGraph(db, engine, "React", { minScore: 0 });
+    const results = await searchGraph(db, engine, "React", { minScore: 0 });
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]!.entity.name).toBe("React");
   });
 
-  it("falls back to LIKE when FTS returns nothing", () => {
+  it("falls back to LIKE when FTS returns nothing", async () => {
     engine.upsertEntity({ name: "MyUniqueEntity", type: "concept", summary: "special" });
 
-    const results = searchGraph(db, engine, "MyUniqueEntity", { minScore: 0 });
+    const results = await searchGraph(db, engine, "MyUniqueEntity", { minScore: 0 });
     expect(results.length).toBeGreaterThan(0);
   });
 
@@ -42,11 +42,11 @@ describe("searchGraph", () => {
   // Vector path
   // -------------------------------------------------------------------------
 
-  it("uses vector similarity when queryEmbedding provided", () => {
+  it("uses vector similarity when queryEmbedding provided", async () => {
     engine.upsertEntity({ name: "A", type: "concept", embedding: [1.0, 0.0, 0.0] });
     engine.upsertEntity({ name: "B", type: "concept", embedding: [0.0, 1.0, 0.0] });
 
-    const results = searchGraph(db, engine, "test", {
+    const results = await searchGraph(db, engine, "test", {
       queryEmbedding: [1.0, 0.0, 0.0],
       vectorWeight: 1.0,
       ftsWeight: 0.0,
@@ -63,7 +63,7 @@ describe("searchGraph", () => {
   // Auto embedFn in search
   // -------------------------------------------------------------------------
 
-  it("auto-generates queryEmbedding via engine embedFn", () => {
+  it("auto-generates queryEmbedding via engine embedFn", async () => {
     const mockEmbed: EmbedFn = () => [1.0, 0.0, 0.0];
     const embedEngine = new MemoryGraphEngine(db, { embedFn: mockEmbed });
 
@@ -71,7 +71,7 @@ describe("searchGraph", () => {
     embedEngine.upsertEntity({ name: "B", type: "concept", embedding: [0.0, 1.0, 0.0] });
 
     // Search without explicit queryEmbedding — should use embedFn
-    const results = searchGraph(db, embedEngine, "anything", {
+    const results = await searchGraph(db, embedEngine, "anything", {
       vectorWeight: 1.0,
       ftsWeight: 0.0,
       graphWeight: 0.0,
@@ -87,32 +87,32 @@ describe("searchGraph", () => {
   // Scoring and filtering
   // -------------------------------------------------------------------------
 
-  it("filters by entity type", () => {
+  it("filters by entity type", async () => {
     engine.upsertEntity({ name: "Alice", type: "user" });
     engine.upsertEntity({ name: "Alice Method", type: "concept" });
 
-    const results = searchGraph(db, engine, "Alice", { types: ["user"] });
+    const results = await searchGraph(db, engine, "Alice", { types: ["user"] });
     for (const r of results) {
       expect(r.entity.type).toBe("user");
     }
   });
 
-  it("respects minScore threshold", () => {
+  it("respects minScore threshold", async () => {
     engine.upsertEntity({ name: "X", type: "concept" });
 
-    const results = searchGraph(db, engine, "X", { minScore: 0.99 });
+    const results = await searchGraph(db, engine, "X", { minScore: 0.99 });
     // Very high threshold — may return 0 results
     for (const r of results) {
       expect(r.score).toBeGreaterThanOrEqual(0.99);
     }
   });
 
-  it("includes edges and related names", () => {
+  it("includes edges and related names", async () => {
     const a = engine.upsertEntity({ name: "Alice", type: "user" });
     const b = engine.upsertEntity({ name: "ProjectX", type: "project" });
     engine.addEdge({ fromId: a.id, toId: b.id, relation: "works_on" });
 
-    const results = searchGraph(db, engine, "Alice", { includeEdges: true, minScore: 0 });
+    const results = await searchGraph(db, engine, "Alice", { includeEdges: true, minScore: 0 });
     expect(results.length).toBeGreaterThan(0);
     const alice = results.find((r) => r.entity.name === "Alice");
     if (alice) {
@@ -121,7 +121,7 @@ describe("searchGraph", () => {
     }
   });
 
-  it("applies temporal decay", () => {
+  it("applies temporal decay", async () => {
     // Create an old entity
     const old = engine.upsertEntity({ name: "Ancient", type: "concept" });
     // Manually set updated_at to 365 days ago
@@ -132,7 +132,7 @@ describe("searchGraph", () => {
 
     const fresh = engine.upsertEntity({ name: "Fresh", type: "concept" });
 
-    const results = searchGraph(db, engine, "concept", {
+    const results = await searchGraph(db, engine, "concept", {
       temporalDecayDays: 30,
       minScore: 0,
     });
@@ -146,14 +146,14 @@ describe("searchGraph", () => {
     }
   });
 
-  it("applies diversity filter when results exceed maxResults", () => {
+  it("applies diversity filter when results exceed maxResults", async () => {
     // Create many entities of same type
     for (let i = 0; i < 20; i++) {
       engine.upsertEntity({ name: `Entity${i}`, type: "concept", summary: `common query term ${i}` });
     }
     engine.upsertEntity({ name: "DifferentType", type: "user", summary: "common query term" });
 
-    const results = searchGraph(db, engine, "common query term", { maxResults: 5 });
+    const results = await searchGraph(db, engine, "common query term", { maxResults: 5 });
     expect(results.length).toBeLessThanOrEqual(5);
   });
 
@@ -161,23 +161,23 @@ describe("searchGraph", () => {
   // Edge cases
   // -------------------------------------------------------------------------
 
-  it("returns empty for no matches", () => {
-    const results = searchGraph(db, engine, "zzzznonexistent");
+  it("returns empty for no matches", async () => {
+    const results = await searchGraph(db, engine, "zzzznonexistent");
     expect(results).toEqual([]);
   });
 
-  it("handles empty query gracefully", () => {
+  it("handles empty query gracefully", async () => {
     engine.upsertEntity({ name: "Test", type: "concept" });
     // Empty query — FTS sanitizer returns "", LIKE fallback with %% matches all
-    const results = searchGraph(db, engine, "");
+    const results = await searchGraph(db, engine, "");
     expect(Array.isArray(results)).toBe(true);
   });
 
-  it("excludes invalidated entities by default", () => {
+  it("excludes invalidated entities by default", async () => {
     const entity = engine.upsertEntity({ name: "Gone", type: "concept", summary: "disappeared" });
     engine.invalidateEntity(entity.id);
 
-    const results = searchGraph(db, engine, "Gone");
+    const results = await searchGraph(db, engine, "Gone");
     const found = results.find((r) => r.entity.id === entity.id);
     expect(found).toBeUndefined();
   });
@@ -187,12 +187,12 @@ describe("searchGraph", () => {
   // -------------------------------------------------------------------------
 
   describe("search cache", () => {
-    it("returns cached results on repeated query", () => {
+    it("returns cached results on repeated query", async () => {
       engine.upsertEntity({ name: "Cached", type: "concept", summary: "test cache" });
 
       const opts = { minScore: 0, vectorWeight: 0, ftsWeight: 1, graphWeight: 0 };
-      const results1 = searchGraph(db, engine, "Cached", opts);
-      const results2 = searchGraph(db, engine, "Cached", opts);
+      const results1 = await searchGraph(db, engine, "Cached", opts);
+      const results2 = await searchGraph(db, engine, "Cached", opts);
 
       expect(results2.length).toBe(results1.length);
       if (results1.length > 0 && results2.length > 0) {
@@ -200,26 +200,26 @@ describe("searchGraph", () => {
       }
     });
 
-    it("cache can be cleared", () => {
+    it("cache can be cleared", async () => {
       engine.upsertEntity({ name: "Fresh", type: "concept", summary: "clear cache" });
 
-      searchGraph(db, engine, "Fresh", { minScore: 0 });
+      await searchGraph(db, engine, "Fresh", { minScore: 0 });
       clearSearchCache();
 
-      const results = searchGraph(db, engine, "Fresh", { minScore: 0 });
+      const results = await await searchGraph(db, engine, "Fresh", { minScore: 0 });
       expect(results.length).toBeGreaterThan(0);
     });
 
     it("cache respects TTL", async () => {
       engine.upsertEntity({ name: "TTL", type: "concept", summary: "ttl test" });
 
-      searchGraph(db, engine, "TTL", { minScore: 0, cacheTtlMs: 50 });
+      await searchGraph(db, engine, "TTL", { minScore: 0, cacheTtlMs: 50 });
 
       await new Promise((r) => setTimeout(r, 60));
 
       engine.upsertEntity({ name: "TTL", type: "concept", summary: "updated" });
 
-      const results2 = searchGraph(db, engine, "TTL", { minScore: 0, cacheTtlMs: 50 });
+      const results2 = await await searchGraph(db, engine, "TTL", { minScore: 0, cacheTtlMs: 50 });
       expect(results2.length).toBeGreaterThan(0);
     });
   });
@@ -229,12 +229,12 @@ describe("searchGraph", () => {
   // -------------------------------------------------------------------------
 
   describe("FTS score normalization", () => {
-    it("returns meaningful scores even with small document sets", () => {
+    it("returns meaningful scores even with small document sets", async () => {
       engine.upsertEntity({ name: "React", type: "concept", summary: "UI library by Meta" });
       engine.upsertEntity({ name: "Vue", type: "concept", summary: "Progressive framework" });
       engine.upsertEntity({ name: "Angular", type: "concept", summary: "Platform for web apps" });
 
-      const results = searchGraph(db, engine, "React", {
+      const results = await searchGraph(db, engine, "React", {
         vectorWeight: 0,
         ftsWeight: 1.0,
         graphWeight: 0,
@@ -246,11 +246,11 @@ describe("searchGraph", () => {
       expect(results[0]!.score).toBeGreaterThan(0.1);
     });
 
-    it("gives higher score to better matches", () => {
+    it("gives higher score to better matches", async () => {
       engine.upsertEntity({ name: "React", type: "concept", summary: "UI library" });
       engine.upsertEntity({ name: "ReactiveX", type: "concept", summary: "Reactive extensions" });
 
-      const results = searchGraph(db, engine, "React", {
+      const results = await searchGraph(db, engine, "React", {
         vectorWeight: 0,
         ftsWeight: 1.0,
         graphWeight: 0,

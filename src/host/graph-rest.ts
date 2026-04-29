@@ -29,7 +29,7 @@ export function createRestServer(opts?: RestServerOpts): {
   const engine = new MemoryGraphEngine(db, { namespace: opts?.namespace });
   ensureGraphSchema({ db, engine, ftsEnabled: true });
 
-  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
     const method = req.method ?? "GET";
 
@@ -51,7 +51,7 @@ export function createRestServer(opts?: RestServerOpts): {
     // GET /search?q=...
     if (method === "GET" && url.pathname === "/search") {
       const query = url.searchParams.get("q") ?? "";
-      const result = memoryGraphSearch(db, engine, { query });
+      const result = await memoryGraphSearch(db, engine, { query });
       return send(result);
     }
 
@@ -120,9 +120,15 @@ export function createRestServer(opts?: RestServerOpts): {
 }
 
 export function startRestServer(opts?: RestServerOpts): Promise<{ port: number; close: () => void }> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const { server, db } = createRestServer(opts);
     const port = opts?.port ?? 0;
+
+    server.on("error", (err: Error) => {
+      db.close();
+      reject(err);
+    });
+
     server.listen(port, opts?.host ?? "127.0.0.1", () => {
       const addr = server.address();
       const actualPort = typeof addr === "object" && addr ? addr.port : port;
