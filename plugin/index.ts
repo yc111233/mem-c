@@ -416,7 +416,28 @@ export default {
 
         if (l0.entries.length === 0) return;
 
-        const section = formatL0AsPromptSection(l0);
+        let section = formatL0AsPromptSection(l0);
+
+        // Enrich with top relations for each entity
+        const relLines: string[] = [];
+        const entityNames = l0.entries.map((e) => e.match(/^- (.+?) \(/)?.[1]).filter(Boolean);
+        for (const name of entityNames.slice(0, 15)) {
+          const matches = engine.findEntities({ name, activeOnly: true, limit: 1 });
+          const entity = matches[0];
+          if (!entity) continue;
+          const edges = engine.findEdges({ entityId: entity.id, activeOnly: true, limit: 5 });
+          for (const edge of edges.slice(0, 3)) {
+            const isOutgoing = edge.from_id === entity.id;
+            const targetId = isOutgoing ? edge.to_id : edge.from_id;
+            const target = engine.getEntity(targetId);
+            if (!target) continue;
+            const arrow = isOutgoing ? "->" : "<-";
+            relLines.push(`${name} ${arrow}[${edge.relation}] ${target.name}`);
+          }
+        }
+        if (relLines.length > 0) {
+          section += "\n\n## Key Relationships\n" + relLines.join("\n");
+        }
         return {
           prependContext:
             "<knowledge-graph-context>\n" +
