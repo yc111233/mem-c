@@ -1,5 +1,5 @@
 /**
- * OpenClaw Memory Graph Plugin
+ * MEM-C Memory Graph Plugin
  *
  * Knowledge graph memory backed by mem-c engine.
  * Provides tools (search/store/detail/graph/invalidate),

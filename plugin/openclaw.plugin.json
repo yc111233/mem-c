@@ -4,7 +4,7 @@
   "uiHints": {
     "dbPath": {
       "label": "Database Path",
-      "placeholder": "~/.openclaw/memory/graph.db",
+      "placeholder": "~/.mem-c/graph.db",
       "help": "Path to the SQLite database file for the knowledge graph"
     },
     "autoExtract": {

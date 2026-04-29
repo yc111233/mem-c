@@ -12,7 +12,7 @@ export type MemoryGraphConfig = {
   recallAvailableBudget: number;
 };
 
-const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "graph.db");
+const DEFAULT_DB_PATH = join(homedir(), ".mem-c", "graph.db");
 const DEFAULT_RECALL_MAX_TOKENS = 200;
 const DEFAULT_RECALL_MAX_ENTITIES = 50;
 const DEFAULT_SEARCH_MAX_RESULTS = 6;
