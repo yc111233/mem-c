@@ -63,7 +63,7 @@ MEM-C v1.0.0 is the first stable release. Key capabilities:
 ### Added
 - **Community summaries**: `summarizeCommunities()` runs an LLM callback on each detected community to generate labels. Stored in `communities.label`. Prompt template `COMMUNITY_SUMMARY_PROMPT` provided.
 - **Relation type inference**: `inferRelationTypes()` analyzes edges with generic relation types (e.g., `relates_to`) and suggests richer alternatives via LLM callback. `applySuggestions()` updates edges with inferred types and metadata.
-- **New agent tools**: `memorySummarizeCommunities`, `memoryInferRelations`.
+- **New library tool helpers**: `memorySummarizeCommunities`, `memoryInferRelations` for hosts that can inject LLM callbacks.
 
 ## [0.5.0] - 2026-04-28
 
@@ -71,14 +71,14 @@ MEM-C v1.0.0 is the first stable release. Key capabilities:
 - **Community detection**: BFS-based connected components algorithm detects entity clusters. Results stored in `communities`/`community_members` tables. `detectCommunities()`, `getCommunities()`, `getCommunityForEntity()` APIs.
 - **Multi-hop path finding**: `findPaths(fromId, toId)` discovers all paths between two entities up to configurable depth via BFS with cycle detection. Returns paths sorted by length.
 - **Graph visualization export**: `exportGraph()` produces Mermaid, DOT, or JSON output. Supports full-graph and entity-centered (with depth) export. Special characters sanitized for Mermaid/DOT.
-- **New agent tools**: `memoryDetectCommunities`, `memoryFindPaths`, `memoryExportGraph`.
+- **New agent tools**: `memoryDetectCommunities`, `memoryFindPaths`, `memoryExportGraph` (now also registered by the OpenClaw plugin).
 
 ## [0.4.0] - 2026-04-28
 
 ### Added
 - **sqlite-vec ANN index**: Optional approximate nearest neighbor search via `vec0` virtual table. Falls back to current full-scan when sqlite-vec is not installed. Entities auto-synced to vec index on write. Configurable dimensions via `vecDimensions` parameter.
 - **Incremental embedding updates**: `embedFn` only called when entity name or summary changes (tracked via `content_hash` column). Saves expensive API calls on no-op updates.
-- **Batch operations**: `upsertEntities()` and `addEdges()` for multi-item operations in a single transaction. New `memoryBatchStore` agent tool.
+- **Batch operations**: `upsertEntities()` and `addEdges()` for multi-item operations in a single transaction. New `memoryBatchStore` agent tool (now also registered by the OpenClaw plugin).
 - **FTS score normalization**: Rank-based transform (`-rank / (-rank + 1)`) replaces relative-to-best normalization. Scores are now meaningful (0.1–1.0 range) even with small document sets.
 - **Search result cache**: LRU cache (128 entries, 30s TTL) for `searchGraph`. Auto-invalidated on entity writes. Configurable per-query via `cacheTtlMs`. `clearSearchCache()` exported for manual invalidation.
 

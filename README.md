@@ -76,8 +76,8 @@ import { ensureGraphSchema, MemoryGraphEngine, searchGraph } from "mem-c";
 
 // Initialize
 const db = new DatabaseSync("memory.db");
-const { entityFtsAvailable } = ensureGraphSchema({ db });
 const engine = new MemoryGraphEngine(db);
+const { entityFtsAvailable } = ensureGraphSchema({ db, engine });
 
 // Store entities
 const user = engine.upsertEntity({ name: "Alice", type: "user", summary: "Lead engineer" });
@@ -175,22 +175,27 @@ const result = await extractAndMerge({
 
 ## Agent Tools
 
-Pre-built tool functions for agent integration:
+The library exports 12 pre-built tool helpers.
 
 | Tool | Function | Purpose |
 |------|----------|---------|
 | `memoryGraphSearch` | Hybrid search | Find relevant entities |
 | `memoryStore` | Create/update entity | Store facts with relations |
+| `memoryBatchStore` | Batch upsert | Store multiple entities in one transaction |
 | `memoryDetail` | L2 context | Get full entity detail |
 | `memoryGraph` | Graph visualization | Show entity relationships |
 | `memoryInvalidate` | Soft delete | Mark facts as outdated |
 | `memoryConsolidate` | Graph hygiene | Merge duplicates, decay stale, prune orphans |
-| `memoryBatchStore` | Batch create | Store multiple entities in one transaction |
-| `memoryDetectCommunities` | Community detection | Find entity clusters |
-| `memoryFindPaths` | Path finding | Multi-hop reasoning between entities |
-| `memoryExportGraph` | Graph export | Mermaid/DOT/JSON visualization |
-| `memorySummarizeCommunities` | Community labels | LLM-generated cluster summaries |
-| `memoryInferRelations` | Relation inference | Suggest richer relation types |
+| `memoryDetectCommunities` | Community detection | Find connected clusters |
+| `memoryFindPaths` | Multi-hop traversal | Discover paths between entities |
+| `memoryExportGraph` | Graph export | Export Mermaid / DOT / JSON |
+| `memorySummarizeCommunities` | Callback-driven summary | Summarize communities with host LLM |
+| `memoryInferRelations` | Callback-driven inference | Suggest richer relation types with host LLM |
+
+The OpenClaw plugin registers the 10 JSON-native tools above up through `memoryExportGraph`.
+The two callback-driven helpers (`memorySummarizeCommunities`, `memoryInferRelations`) are
+available as library APIs. When `mem-c.config.json` is configured with a `chat` provider,
+the plugin automatically uses the built-in LLM client for extraction.
 
 ## Importance Scoring
 

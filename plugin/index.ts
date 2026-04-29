@@ -2,7 +2,7 @@
  * MEM-C Memory Graph Plugin
  *
  * Knowledge graph memory backed by mem-c engine.
- * Provides tools (search/store/detail/graph/invalidate),
+ * Provides tools (search/store/batch/detail/graph/invalidate/consolidate/community/path/export),
  * lifecycle hooks (auto-recall/auto-extract), and CLI commands.
  *
  * Designed to run alongside memory-viking — complementary, not competing:
@@ -18,10 +18,14 @@ import {
   MemoryGraphEngine,
   memoryGraphSearch,
   memoryStore,
+  memoryBatchStore,
   memoryDetail,
   memoryGraph,
   memoryInvalidate,
   memoryConsolidate,
+  memoryDetectCommunities,
+  memoryFindPaths,
+  memoryExportGraph,
   consolidateGraph,
   buildL0Context,
   buildQueryAwareL0Context,
@@ -243,6 +247,62 @@ export default {
       { name: "memory_graph_store" },
     );
 
+    // -- memory_batch_store ---------------------------------------------------
+    api.registerTool(
+      (_ctx: ToolContext) => ({
+        name: "memory_batch_store",
+        label: "Memory Batch Store (Graph)",
+        description:
+          "Store multiple entities and their relations in one batch transaction.",
+        parameters: {
+          type: "object",
+          properties: {
+            entities: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  type: { type: "string" },
+                  summary: { type: "string" },
+                  confidence: { type: "number" },
+                  relations: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        targetName: { type: "string" },
+                        targetType: { type: "string" },
+                        relation: { type: "string" },
+                      },
+                      required: ["targetName", "targetType", "relation"],
+                    },
+                  },
+                },
+                required: ["name", "type"],
+              },
+              description: "Entities to upsert in a single transaction",
+            },
+          },
+          required: ["entities"],
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const result = await memoryBatchStore(engine, params as Parameters<typeof memoryBatchStore>[1]);
+          return {
+            content: [{
+              type: "text",
+              text:
+                `Stored ${result.totalEntities} entities in batch ` +
+                `(${result.totalEdges} relations created).`,
+            }],
+            details: result,
+            clearable: true,
+          };
+        },
+      }),
+      { name: "memory_batch_store" },
+    );
+
     // -- memory_detail --------------------------------------------------------
     api.registerTool(
       (_ctx: ToolContext) => ({
@@ -358,6 +418,99 @@ export default {
         },
       }),
       { name: "memory_consolidate" },
+    );
+
+    // -- memory_detect_communities -------------------------------------------
+    api.registerTool(
+      (_ctx: ToolContext) => ({
+        name: "memory_detect_communities",
+        label: "Memory Detect Communities",
+        description: "Detect connected communities in the knowledge graph.",
+        parameters: {
+          type: "object",
+          properties: {
+            activeOnly: {
+              type: "boolean",
+              description: "Only consider active entities and edges (default: true)",
+            },
+          },
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const result = memoryDetectCommunities(
+            engine,
+            params as Parameters<typeof memoryDetectCommunities>[1],
+          );
+          return {
+            content: [{
+              type: "text",
+              text:
+                `Detected ${result.communityCount} communities ` +
+                `covering ${result.totalEntities} entities.`,
+            }],
+            details: result,
+            clearable: true,
+          };
+        },
+      }),
+      { name: "memory_detect_communities" },
+    );
+
+    // -- memory_find_paths ----------------------------------------------------
+    api.registerTool(
+      (_ctx: ToolContext) => ({
+        name: "memory_find_paths",
+        label: "Memory Find Paths",
+        description: "Find multi-hop paths between two entities in the knowledge graph.",
+        parameters: {
+          type: "object",
+          properties: {
+            from: { type: "string", description: "Source entity name or ID" },
+            to: { type: "string", description: "Target entity name or ID" },
+            maxDepth: { type: "number", description: "Maximum hop count (default: 3)" },
+            maxPaths: { type: "number", description: "Maximum paths to return (default: 5)" },
+          },
+          required: ["from", "to"],
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const result = memoryFindPaths(engine, params as Parameters<typeof memoryFindPaths>[1]);
+          return {
+            content: [{ type: "text", text: result.formatted }],
+            details: result,
+            clearable: true,
+          };
+        },
+      }),
+      { name: "memory_find_paths" },
+    );
+
+    // -- memory_export_graph --------------------------------------------------
+    api.registerTool(
+      (_ctx: ToolContext) => ({
+        name: "memory_export_graph",
+        label: "Memory Export Graph",
+        description: "Export the graph as Mermaid, DOT, or JSON.",
+        parameters: {
+          type: "object",
+          properties: {
+            format: {
+              type: "string",
+              enum: ["mermaid", "dot", "json"],
+              description: "Export format (default: mermaid)",
+            },
+            centerEntity: { type: "string", description: "Optional center entity name or ID" },
+            depth: { type: "number", description: "Optional export depth around center entity" },
+          },
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const result = memoryExportGraph(engine, params as Parameters<typeof memoryExportGraph>[1]);
+          return {
+            content: [{ type: "text", text: result.content }],
+            details: result,
+            clearable: true,
+          };
+        },
+      }),
+      { name: "memory_export_graph" },
     );
 
     // ========================================================================

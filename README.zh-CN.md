@@ -69,8 +69,8 @@ import { ensureGraphSchema, MemoryGraphEngine, searchGraph } from "mem-c";
 
 // 初始化
 const db = new DatabaseSync("memory.db");
-const { entityFtsAvailable } = ensureGraphSchema({ db });
 const engine = new MemoryGraphEngine(db);
+const { entityFtsAvailable } = ensureGraphSchema({ db, engine });
 
 // 存储实体
 const user = engine.upsertEntity({ name: "Alice", type: "user", summary: "首席工程师" });
@@ -168,16 +168,26 @@ const result = await extractAndMerge({
 
 ## 智能体工具
 
-六个预构建的工具函数，用于智能体集成：
+本库导出 12 个预构建 tool helper：
 
 | 工具 | 功能 | 用途 |
 |------|------|------|
 | `memoryGraphSearch` | 混合检索 | 查找相关实体 |
 | `memoryStore` | 创建/更新实体 | 存储事实和关系 |
+| `memoryBatchStore` | 批量写入 | 单事务写入多个实体 |
 | `memoryDetail` | L2 上下文 | 获取完整实体详情 |
 | `memoryGraph` | 图可视化 | 展示实体关系 |
 | `memoryInvalidate` | 软删除 | 标记事实为过时 |
 | `memoryConsolidate` | 图谱卫生 | 合并重复、衰减过时、清理孤立 |
+| `memoryDetectCommunities` | 社区检测 | 找出连通实体簇 |
+| `memoryFindPaths` | 多跳遍历 | 查找实体之间路径 |
+| `memoryExportGraph` | 图导出 | 导出 Mermaid / DOT / JSON |
+| `memorySummarizeCommunities` | 回调式摘要 | 用宿主 LLM 为社区生成摘要 |
+| `memoryInferRelations` | 回调式推断 | 用宿主 LLM 推断更具体的关系类型 |
+
+OpenClaw 插件注册前 10 个可直接 JSON 调用的工具（到 `memoryExportGraph` 为止）。
+后两个 helper（`memorySummarizeCommunities`、`memoryInferRelations`）以库层 API 形式提供。
+当 `mem-c.config.json` 配置了 `chat` provider 后，插件会自动使用内置 LLM 客户端执行提取，无需宿主传入 callback。
 
 ## 重要性评分
 
