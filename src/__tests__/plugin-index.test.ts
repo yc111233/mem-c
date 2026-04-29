@@ -95,4 +95,32 @@ describe("memory-graph plugin", () => {
       "memory_export_graph",
     ]);
   });
+
+  it("registers all JSON-native plugin tools", async () => {
+    const pluginModule = await import("../../plugin/index.ts");
+    const plugin = pluginModule.default;
+
+    plugin.register({
+      pluginConfig: { dbPath: "/tmp/openclaw-memory-plugin-test.db" },
+      logger: { info: vi.fn(), warn: vi.fn() },
+      registerTool: registerToolSpy,
+      registerCli: vi.fn(),
+      registerService: vi.fn(),
+      on: vi.fn(),
+    });
+
+    const names = registerToolSpy.mock.calls.map((call) => call[1]?.name);
+    expect(names).toEqual([
+      "memory_graph_search",
+      "memory_graph_store",
+      "memory_batch_store",
+      "memory_detail",
+      "memory_graph",
+      "memory_invalidate",
+      "memory_consolidate",
+      "memory_detect_communities",
+      "memory_find_paths",
+      "memory_export_graph",
+    ]);
+  });
 });
