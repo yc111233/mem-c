@@ -313,6 +313,10 @@ Both use SQLite and can share the same database directory.
 
 - Node.js >= 22.0.0 (for built-in `node:sqlite`)
 
+## CI
+
+GitHub Actions verifies `npm test`, `npm run typecheck`, and `npm run build` on Node 22 and Node 24 for every PR and every push to `main`.
+
 ## License
 
 MIT

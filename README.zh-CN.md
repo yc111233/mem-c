@@ -248,6 +248,10 @@ const result = await migrateMarkdownMemory({
 
 - Node.js >= 22.0.0（需要内置 `node:sqlite`）
 
+## CI
+
+GitHub Actions 会在每次 PR 和每次推送到 `main` 时，基于 Node 22 与 Node 24 运行 `npm test`、`npm run typecheck` 和 `npm run build`。
+
 ## 许可证
 
 MIT
