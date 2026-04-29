@@ -144,13 +144,17 @@ export function validateConfig(config: MemcModelConfig): ConfigValidation {
 
 /**
  * Get the full rerank API URL for a given provider config.
- * DashScope rerank uses a different endpoint than its OpenAI-compatible mode.
+ * DashScope native uses /services/reranking/...; OpenAI-compatible uses /reranks.
  */
 export function getRerankUrl(config: ModelProviderConfig): string {
   if (config.provider === "dashscope") {
     return DASHSCOPE_RERANK_URL;
   }
-  // OpenAI-compatible doesn't have a standard rerank endpoint
+  // DashScope OpenAI-compatible: /reranks (plural)
+  if (config.baseUrl.includes("dashscope")) {
+    return `${config.baseUrl}/reranks`;
+  }
+  // Generic OpenAI-compatible
   return `${config.baseUrl}/rerank`;
 }
 

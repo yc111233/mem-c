@@ -77,9 +77,21 @@ export async function chatCompletion(
 // ---------------------------------------------------------------------------
 
 /**
- * Generate embeddings for one or more texts (OpenAI-compatible format).
+ * Generate embeddings for one or more texts.
+ * Supports OpenAI-compatible and DashScope native formats.
  */
 export async function embedTexts(
+  config: ModelProviderConfig,
+  texts: string[],
+): Promise<number[][]> {
+  if (config.provider === "dashscope") {
+    return embedTextsDashScope(config, texts);
+  }
+  return embedTextsOpenAI(config, texts);
+}
+
+/** OpenAI-compatible embedding: POST /embeddings */
+async function embedTextsOpenAI(
   config: ModelProviderConfig,
   texts: string[],
 ): Promise<number[][]> {
@@ -113,13 +125,48 @@ export async function embedTexts(
   });
 }
 
+/** DashScope native embedding: POST /services/embeddings/multimodal-embedding/multimodal-embedding */
+async function embedTextsDashScope(
+  config: ModelProviderConfig,
+  texts: string[],
+): Promise<number[][]> {
+  const url = `${config.baseUrl}/services/embeddings/multimodal-embedding/multimodal-embedding`;
+  const body: Record<string, unknown> = {
+    model: config.model,
+    input: { texts },
+    parameters: config.dimensions ? { dimension: config.dimensions } : {},
+  };
+
+  const data = await fetchJson<Record<string, unknown>>(
+    url,
+    body,
+    config.apiKey,
+    config.timeoutMs ?? DEFAULT_TIMEOUT_EMBED,
+  );
+
+  const output = data.output as Record<string, unknown> | undefined;
+  const embeddings = output?.embeddings as Array<Record<string, unknown>> | undefined;
+
+  if (!embeddings || embeddings.length === 0) {
+    throw new Error("DashScope embedding API returned empty data");
+  }
+
+  return embeddings.map((item) => {
+    const embedding = item.embedding;
+    if (!Array.isArray(embedding)) {
+      throw new Error("DashScope embedding API returned unexpected format");
+    }
+    return embedding as number[];
+  });
+}
+
 // ---------------------------------------------------------------------------
-// Rerank (DashScope format)
+// Rerank
 // ---------------------------------------------------------------------------
 
 /**
  * Rerank documents by relevance to a query.
- * Uses DashScope's rerank API format.
+ * Supports DashScope native and OpenAI-compatible formats.
  */
 export async function rerankDocuments(
   config: ModelProviderConfig,
@@ -127,14 +174,25 @@ export async function rerankDocuments(
   documents: string[],
 ): Promise<RerankResult[]> {
   const url = getRerankUrl(config);
-  const body = {
-    model: config.model,
-    input: { query, documents },
-    parameters: {
-      return_documents: true,
-      top_n: config.topN ?? documents.length,
-    },
-  };
+
+  // Request body format differs by provider
+  const body = config.provider === "dashscope"
+    ? {
+        // DashScope native: { model, input: { query, documents }, parameters }
+        model: config.model,
+        input: { query, documents },
+        parameters: {
+          return_documents: true,
+          top_n: config.topN ?? documents.length,
+        },
+      }
+    : {
+        // OpenAI-compatible: { model, query, documents, top_n }
+        model: config.model,
+        query,
+        documents,
+        top_n: config.topN ?? documents.length,
+      };
 
   const data = await fetchJson<Record<string, unknown>>(
     url,
@@ -143,11 +201,14 @@ export async function rerankDocuments(
     config.timeoutMs ?? DEFAULT_TIMEOUT_RERANK,
   );
 
-  // DashScope response: { output: { results: [...] } }
+  // Response: DashScope native → { output: { results } }, OpenAI-compat → { results }
+  let results: Array<Record<string, unknown>>;
   const output = data.output as Record<string, unknown> | undefined;
-  const results = output?.results as Array<Record<string, unknown>> | undefined;
-
-  if (!results) {
+  if (output?.results) {
+    results = output.results as Array<Record<string, unknown>>;
+  } else if (Array.isArray(data.results)) {
+    results = data.results as Array<Record<string, unknown>>;
+  } else {
     throw new Error("Rerank API returned unexpected format");
   }
 
