@@ -4,6 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import {
   ensureGraphSchema, MemoryGraphEngine, buildL0Context, formatL0AsPromptSection,
   searchGraph, extractAndMerge, loadConfig, createLlmExtractFn, createEmbedFn, createRerankFn,
+  memoryStore, memoryBatchStore, memoryDetail, memoryGraph, memoryInvalidate, memoryConsolidate,
+  memoryDetectCommunities, memoryFindPaths, memoryExportGraph,
 } from "mem-c";
 
 export default {
@@ -15,16 +17,28 @@ export default {
     searchMaxResults: { type: "number" }, recallAvailableBudget: { type: "number" },
   }},
   register(api) {
-    const cfg = api.config || {};
+    const globalCfg = api.config || {};
+    // Extract plugin-specific config from entries["mem-c"].config
+    let cfg = {};
+    try {
+      const entries = globalCfg.plugins ? globalCfg.plugins.entries : globalCfg.entries;
+      if (entries) {
+        const memcEntry = entries["mem-c"] || entries["mem-c".replace("-", "")];
+        if (memcEntry && memcEntry.config) cfg = memcEntry.config;
+      }
+    } catch (e) { console.error("[mem-c] cfg extract error:", e.message); }
     const dbPath = cfg.dbPath || process.env.MEMC_DB_PATH || (process.env.HOME + "/.mem-c/graph.db");
     mkdirSync(dirname(dbPath), { recursive: true });
     const db = new DatabaseSync(dbPath, { allowExtension: true });
     const { entityFtsAvailable, vecAvailable } = ensureGraphSchema({ db });
+
+
     let modelConfig = null;
     try { modelConfig = loadConfig(); } catch (e) { console.error("[mem-c] config:", e.message); }
     const embedFn = modelConfig && modelConfig.embedding ? createEmbedFn(modelConfig.embedding) : undefined;
     const engine = new MemoryGraphEngine(db, { embedFn });
 
+    // Auto-recall hook
     if (cfg.autoRecall !== false) {
       api.registerHook("before_agent_start", async (ctx) => {
         try {
@@ -35,6 +49,7 @@ export default {
       });
     }
 
+    // Auto-extract hook
     if (cfg.autoExtract !== false) {
       const llmExtract = modelConfig && modelConfig.chat ? createLlmExtractFn(modelConfig.chat) : null;
       api.registerHook("agent_end", async (ctx) => {
@@ -48,53 +63,58 @@ export default {
       });
     }
 
+    // Tool: memory_graph_search
     api.registerTool(function() { return {
       name: "memory_graph_search",
       description: "Search the knowledge graph for entities and relations.",
       parameters: { type: "object", properties: { query: { type: "string" }, types: { type: "array", items: { type: "string" } }, maxResults: { type: "number" }, includeRelations: { type: "boolean" } }, required: ["query"] },
       execute: async function(_tid, params) {
-        var rerankFn = modelConfig && modelConfig.rerank ? createRerankFn(modelConfig.rerank) : undefined;
-        var results = await searchGraph(db, engine, params.query, { maxResults: params.maxResults || cfg.searchMaxResults || 6, types: params.types, includeEdges: params.includeRelations !== false, rerankFn });
-        var text = results.map(function(r) { return "- " + r.entity.name + " (" + r.entity.type + ")" + (r.entity.summary ? ": " + r.entity.summary : "") + " [" + r.score.toFixed(2) + "]"; }).join("\n");
-        return { content: [{ type: "text", text: text || "No matching entities found." }] };
-      }
-    };});
+        try {
 
+          var rerankFn = modelConfig && modelConfig.rerank ? createRerankFn(modelConfig.rerank) : undefined;
+          var results = await searchGraph(db, engine, params.query, { maxResults: params.maxResults || cfg.searchMaxResults || 6, types: params.types, includeEdges: params.includeRelations !== false, rerankFn });
+          var text = results.map(function(r) { return "- " + r.entity.name + " (" + r.entity.type + ")" + (r.entity.summary ? ": " + r.entity.summary : "") + " [" + r.score.toFixed(2) + "]"; }).join("\n");
+          return { content: [{ type: "text", text: text || "No matching entities found." }] };
+        } catch (e) {
+          return { content: [{ type: "text", text: "Search error: " + e.message }] };
+        }
+      }
+    };}, { name: "memory_graph_search" });
+
+    // Tool: memory_graph_store
     api.registerTool(function() { return {
       name: "memory_graph_store",
       description: "Store or update an entity.",
       parameters: { type: "object", properties: { name: { type: "string" }, type: { type: "string" }, summary: { type: "string" }, confidence: { type: "number" } }, required: ["name", "type"] },
       execute: function(_tid, params) {
-        var e = engine.upsertEntity({ name: params.name, type: params.type, summary: params.summary, confidence: params.confidence || 1, source: "manual" });
-        return { content: [{ type: "text", text: (e.isNew ? "Created" : "Updated") + ": " + e.name }] };
+        var result = memoryStore(engine, params);
+        return { content: [{ type: "text", text: (result.isNew ? "Created" : "Updated") + ": " + result.name }] };
       }
-    };});
+    };}, { name: "memory_graph_store" });
 
+    // Tool: memory_graph_detail
     api.registerTool(function() { return {
       name: "memory_graph_detail",
       description: "Get entity details and relations.",
       parameters: { type: "object", properties: { name: { type: "string" }, depth: { type: "number" } }, required: ["name"] },
       execute: function(_tid, params) {
-        var m = engine.findEntities({ name: params.name, activeOnly: true, limit: 1 });
-        if (!m.length) return { content: [{ type: "text", text: "Not found: " + params.name }] };
-        var e = m[0]; var n = engine.getNeighbors(e.id, params.depth || 1);
-        var rels = n.edges.map(function(ed) { var f = engine.getEntity(ed.from_id); var t = engine.getEntity(ed.to_id); return (f && f.name || "?") + " --" + ed.relation + "--> " + (t && t.name || "?"); });
-        return { content: [{ type: "text", text: JSON.stringify({ name: e.name, type: e.type, summary: e.summary, relations: rels }, null, 2) }] };
+        var result = memoryDetail(engine, params);
+        if (!result.found) return { content: [{ type: "text", text: "Not found: " + params.name }] };
+        return { content: [{ type: "text", text: result.formatted }] };
       }
-    };});
+    };}, { name: "memory_graph_detail" });
 
+    // Tool: memory_graph_invalidate
     api.registerTool(function() { return {
       name: "memory_graph_invalidate",
       description: "Soft-delete an entity.",
       parameters: { type: "object", properties: { name: { type: "string" }, reason: { type: "string" } }, required: ["name"] },
       execute: function(_tid, params) {
-        var m = engine.findEntities({ name: params.name, activeOnly: true, limit: 1 });
-        if (!m.length) return { content: [{ type: "text", text: "Not found: " + params.name }] };
-        engine.invalidateEntity(m[0].id, params.reason || "manual");
-        return { content: [{ type: "text", text: "Invalidated: " + params.name }] };
+        var result = memoryInvalidate(engine, params);
+        return { content: [{ type: "text", text: result.invalidated ? "Invalidated: " + params.name : "Not found: " + params.name }] };
       }
-    };});
+    };}, { name: "memory_graph_invalidate" });
 
-    console.error("[mem-c] loaded - " + (entityFtsAvailable ? "FTS" : "no-FTS") + ", " + (vecAvailable ? "vec" : "no-vec") + ", config: " + (modelConfig ? "yes" : "no"));
+    console.error("[mem-c] loaded - FTS:" + (entityFtsAvailable ? "yes" : "no") + " vec:" + (vecAvailable ? "yes" : "no") + " config:" + (modelConfig ? "yes" : "no"));
   },
 };
