@@ -21,6 +21,9 @@ import {
   formatL2AsDetail,
   type L2DetailLevel,
 } from "./graph-context-loader.js";
+import { retrieve, type SearchMode, type RetrievalResult } from "./graph-retrieval.js";
+import { ensureVecIndex, vecSyncAll } from "./graph-vec.js";
+import { syncEntityFts, type EpisodeRow, type EpisodeTextUnitRow, type SupersessionProposalRow } from "./graph-schema.js";
 
 // ---------------------------------------------------------------------------
 // Tool: memory_graph_search
@@ -33,7 +36,8 @@ export type MemoryGraphSearchInput = {
   includeRelations?: boolean;
   /** Compact mode: omit relations from L1 output to save tokens. */
   compact?: boolean;
-  namespace?: string;
+  /** Search mode: "entity" (focused), "global" (community reports), "mixed" (auto), "debug". */
+  mode?: SearchMode;
 };
 
 export type MemoryGraphSearchOutput = {
@@ -45,6 +49,8 @@ export type MemoryGraphSearchOutput = {
     relations: string[];
   }>;
   formatted: string;
+  /** Full retrieval pipeline result (populated when mode is set). */
+  retrieval?: RetrievalResult;
 };
 
 export async function memoryGraphSearch(
@@ -55,6 +61,25 @@ export async function memoryGraphSearch(
 ): Promise<MemoryGraphSearchOutput> {
   const includeRelations = input.includeRelations !== false;
   const compact = (input.compact ?? false) || !includeRelations;
+
+  // Run retrieval pipeline when mode is explicitly set
+  let retrieval: RetrievalResult | undefined;
+  if (input.mode) {
+    retrieval = await retrieve(db, engine, input.query, {
+      mode: input.mode,
+      maxResults: input.maxResults ?? 6,
+      queryEmbedding,
+    });
+
+    // Global mode: return retrieval result directly (no L1 entities)
+    if (retrieval.mode === "global") {
+      const formatted = retrieval.communityReports
+        .map((r) => `**${r.label}**\n${r.summary}`)
+        .join("\n\n");
+      return { results: [], formatted, retrieval };
+    }
+  }
+
   const l1 = await buildL1Context(db, engine, input.query, {
     maxResults: input.maxResults ?? 6,
     compact,
@@ -79,6 +104,7 @@ export async function memoryGraphSearch(
   return {
     results,
     formatted: formatL1AsSearchContext(l1),
+    retrieval,
   };
 }
 
@@ -93,7 +119,6 @@ export type MemoryStoreInput = {
   confidence?: number;
   /** Optional relations to create: [{target, relation}] */
   relations?: Array<{ targetName: string; targetType: string; relation: string }>;
-  namespace?: string;
 };
 
 export type MemoryStoreOutput = {
@@ -637,5 +662,240 @@ export async function memoryInferRelations(
     })),
     applied: input.autoApply ?? false,
     errors: result.errors,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_episodes
+// ---------------------------------------------------------------------------
+
+export type MemoryEpisodesInput = {
+  sessionKey?: string;
+  limit?: number;
+};
+
+export function memoryEpisodes(
+  engine: MemoryGraphEngine,
+  input: MemoryEpisodesInput,
+): { episodes: Array<{ id: string; sessionKey: string; turnIndex: number | null; content: string; timestamp: number }>; total: number } {
+  const db = engine.getDb();
+  const limit = input.limit ?? 50;
+
+  let rows: EpisodeRow[];
+  if (input.sessionKey) {
+    rows = engine.getEpisodes(input.sessionKey, limit);
+  } else {
+    // List all episodes (no session filter)
+    const ns = engine.getNamespace();
+    const nsClause = ns !== null ? "namespace = ?" : "namespace IS NULL";
+    const params = ns !== null ? [ns, limit] : [limit];
+    rows = db
+      .prepare(`SELECT * FROM episodes WHERE ${nsClause} ORDER BY timestamp DESC LIMIT ?`)
+      .all(...params) as EpisodeRow[];
+  }
+
+  return {
+    episodes: rows.map((r) => ({
+      id: r.id,
+      sessionKey: r.session_key,
+      turnIndex: r.turn_index,
+      content: r.content,
+      timestamp: r.timestamp,
+    })),
+    total: rows.length,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_text_units
+// ---------------------------------------------------------------------------
+
+export type MemoryTextUnitsInput = {
+  episodeId: string;
+};
+
+export function memoryTextUnits(
+  engine: MemoryGraphEngine,
+  input: MemoryTextUnitsInput,
+): { units: Array<{ id: string; content: string; speaker: string | null; turnIndex: number | null }> } {
+  const db = engine.getDb();
+  const ns = engine.getNamespace();
+  const nsClause = ns !== null ? "namespace = ?" : "namespace IS NULL";
+  const params: (string | null)[] = ns !== null ? [input.episodeId, ns] : [input.episodeId];
+
+  const rows = db
+    .prepare(`SELECT * FROM episode_text_units WHERE episode_id = ? AND ${nsClause} ORDER BY created_at ASC`)
+    .all(...params) as EpisodeTextUnitRow[];
+
+  return {
+    units: rows.map((r) => ({
+      id: r.id,
+      content: r.content,
+      speaker: r.speaker,
+      turnIndex: r.turn_index,
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_proposals
+// ---------------------------------------------------------------------------
+
+export type MemoryProposalsInput = {
+  status?: "pending" | "approved" | "rejected";
+  limit?: number;
+};
+
+export function memoryProposals(
+  engine: MemoryGraphEngine,
+  input: MemoryProposalsInput,
+): { proposals: Array<{ id: string; entityName: string; reason: string | null; status: string; createdAt: number }> } {
+  const db = engine.getDb();
+  const ns = engine.getNamespace();
+  const limit = input.limit ?? 100;
+
+  const conditions: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  if (input.status) {
+    conditions.push("p.status = ?");
+    params.push(input.status);
+  }
+
+  const nsClause = ns !== null ? "p.namespace = ?" : "p.namespace IS NULL";
+  conditions.push(nsClause);
+  if (ns !== null) params.push(ns);
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const rows = db
+    .prepare(
+      `SELECT p.*, e.name AS entity_name FROM supersession_proposals p ` +
+        `LEFT JOIN entities e ON e.id = p.target_entity_id ` +
+        `${where} ORDER BY p.created_at DESC LIMIT ?`,
+    )
+    .all(...params, limit) as Array<SupersessionProposalRow & { entity_name: string | null }>;
+
+  return {
+    proposals: rows.map((r) => ({
+      id: r.id,
+      entityName: r.entity_name ?? r.target_entity_id,
+      reason: r.reason,
+      status: r.status,
+      createdAt: r.created_at,
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_resolve_proposal
+// ---------------------------------------------------------------------------
+
+export type MemoryResolveProposalInput = {
+  proposalId: string;
+  decision: "approved" | "rejected";
+  reason?: string;
+};
+
+export function memoryResolveProposal(
+  engine: MemoryGraphEngine,
+  input: MemoryResolveProposalInput,
+): { resolved: boolean; proposalId: string; decision: string } {
+  const result = engine.resolveSupersession(input.proposalId, input.decision);
+  return {
+    resolved: result !== null,
+    proposalId: input.proposalId,
+    decision: input.decision,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_rebuild_index
+// ---------------------------------------------------------------------------
+
+export type MemoryRebuildIndexInput = {
+  target: "fts" | "vec" | "community" | "all";
+};
+
+export function memoryRebuildIndex(
+  engine: MemoryGraphEngine,
+  input: MemoryRebuildIndexInput,
+): { rebuilt: string[]; details: Record<string, number> } {
+  const db = engine.getDb();
+  const rebuilt: string[] = [];
+  const details: Record<string, number> = {};
+
+  if (input.target === "fts" || input.target === "all") {
+    // Rebuild FTS by re-syncing all active entities
+    const entities = engine.getActiveEntities();
+    for (const entity of entities) {
+      syncEntityFts(db, entity);
+    }
+    details.ftsEntities = entities.length;
+    rebuilt.push("fts");
+  }
+
+  if (input.target === "vec" || input.target === "all") {
+    // Rebuild vec index: ensure table exists, then sync all embeddings
+    const vecResult = ensureVecIndex(db, 384); // default dimensions
+    engine.setVecAvailable(vecResult.available);
+    if (vecResult.available) {
+      const synced = vecSyncAll(db, true);
+      details.vecSynced = synced;
+    }
+    details.vecAvailable = vecResult.available ? 1 : 0;
+    rebuilt.push("vec");
+  }
+
+  if (input.target === "community" || input.target === "all") {
+    // Rebuild community detection
+    const result = detectCommunities(engine, { activeOnly: true });
+    details.communityCount = result.communities.length;
+    details.communityEntities = result.totalEntities;
+    rebuilt.push("community");
+  }
+
+  return { rebuilt, details };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: memory_stats
+// ---------------------------------------------------------------------------
+
+export function memoryStats(
+  engine: MemoryGraphEngine,
+): {
+  entities: number;
+  activeEntities: number;
+  edges: number;
+  episodes: number;
+  communities: number;
+  pendingProposals: number;
+  properties: number;
+} {
+  const db = engine.getDb();
+  const base = engine.stats();
+  const ns = engine.getNamespace();
+  const nsClause = ns !== null ? "namespace = ?" : "namespace IS NULL";
+  const params: (string | null)[] = ns !== null ? [ns] : [];
+
+  const communities = (db
+    .prepare(`SELECT COUNT(*) as c FROM communities WHERE ${nsClause}`)
+    .get(...params) as { c: number }).c;
+
+  const pendingProposals = engine.getPendingProposals({ limit: 1000 }).length;
+
+  const properties = (db
+    .prepare(`SELECT COUNT(*) as c FROM entity_properties WHERE ${nsClause}`)
+    .get(...params) as { c: number }).c;
+
+  return {
+    entities: base.entities,
+    activeEntities: base.activeEntities,
+    edges: base.edges,
+    episodes: base.episodes,
+    communities,
+    pendingProposals,
+    properties,
   };
 }

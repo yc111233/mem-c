@@ -86,14 +86,25 @@ export function createSummarizeFn(config: ModelProviderConfig): SummarizeFn {
 
     const prompt = `Entities:\n${entityList}\n\nRelations:\n${relList}`;
 
-    return chatCompletion(config, [
+    const raw = await chatCompletion(config, [
       {
         role: "system",
         content:
-          "You are analyzing a cluster of related entities in a knowledge graph. Generate a concise label (2-5 words) that describes what this community is about. Return ONLY the label text, no explanation. Be specific, not generic.",
+          'You are analyzing a cluster of related entities in a knowledge graph. Generate a label (2-5 words) and summary (2-3 sentences). Return ONLY valid JSON: {"label": "...", "summary": "..."}. Be specific, not generic.',
       },
       { role: "user", content: prompt },
     ]);
+
+    try {
+      const parsed = JSON.parse(raw) as { label?: string; summary?: string };
+      return {
+        label: parsed.label ?? raw.trim().split("\n")[0]?.slice(0, 50) ?? "Unknown",
+        summary: parsed.summary ?? raw.trim(),
+      };
+    } catch {
+      // Fallback: treat entire response as label
+      return { label: raw.trim().split("\n")[0]?.slice(0, 50) ?? "Unknown", summary: raw.trim() };
+    }
   };
 }
 

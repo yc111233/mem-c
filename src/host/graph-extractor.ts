@@ -19,8 +19,13 @@ import type { MemoryGraphEngine, EntityInput, EdgeInput, EpisodeInput } from "./
 export type ExtractionResult = {
   entities: ExtractedEntity[];
   relations: ExtractedRelation[];
-  /** Entity names that should be invalidated (contradicted by new info). */
-  invalidations: Array<{ name: string; type: string; reason: string }>;
+  /** Contradictions detected between new info and existing entities. */
+  contradictions: Array<{
+    existingEntityName: string;
+    existingEntityType: string;
+    newInfo: string;
+    reason: string;
+  }>;
 };
 
 export type ExtractedEntity = {
@@ -62,8 +67,8 @@ Return ONLY valid JSON matching this schema:
   "relations": [
     { "fromName": string, "fromType": string, "toName": string, "toType": string, "relation": string }
   ],
-  "invalidations": [
-    { "name": string, "type": string, "reason": string }
+  "contradictions": [
+    { "existingEntityName": string, "existingEntityType": string, "newInfo": string, "reason": string }
   ]
 }
 
@@ -95,7 +100,7 @@ works_on, decided, prefers, knows, uses, created, depends_on, relates_to, replac
 - Extract SPECIFIC tools and skills. "会用飞书多维表格" ✅  "会用办公软件" ❌
 - summary field must be a concrete 1-sentence description, not a category name.
 - Set confidence between 0.5 (inferred) to 1.0 (explicitly stated).
-- If a new fact contradicts a previous fact, add the old fact to invalidations.
+- If a new fact contradicts a previous fact, add a contradiction entry with the new info and reason.
 - Keep entity names concise (1-4 words). Use proper nouns when available.
 - Do NOT extract greetings, filler, or generic statements like "会写代码" or "懂技术".
 - Do NOT output abstract categories as entities. Every entity must be a CONCRETE thing.
@@ -120,7 +125,8 @@ export type ExtractAndMergeResult = {
   entitiesCreated: number;
   entitiesUpdated: number;
   edgesCreated: number;
-  invalidated: number;
+  supersessionProposals: number;
+  assertionsRecorded: number;
   episodeRecorded: boolean;
   errors: string[];
 };
@@ -142,7 +148,8 @@ export async function extractAndMerge(params: {
     entitiesCreated: 0,
     entitiesUpdated: 0,
     edgesCreated: 0,
-    invalidated: 0,
+    supersessionProposals: 0,
+    assertionsRecorded: 0,
     episodeRecorded: false,
     errors: [],
   };
@@ -167,25 +174,7 @@ export async function extractAndMerge(params: {
 
   // Wrap all database mutations in a single transaction
   params.engine.runInTransaction(() => {
-    // Process invalidations first
-    for (const inv of extraction.invalidations) {
-      try {
-        const matches = params.engine.findEntities({
-          name: inv.name,
-          type: inv.type,
-          activeOnly: true,
-          limit: 1,
-        });
-        if (matches.length > 0) {
-          params.engine.invalidateEntity(matches[0]!.id, inv.reason);
-          result.invalidated++;
-        }
-      } catch (err) {
-        result.errors.push(`Invalidation failed for "${inv.name}": ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
-    // Upsert entities
+    // Upsert entities first (so we have IDs for assertions)
     const nameToId = new Map<string, string>();
     for (const extracted of extraction.entities) {
       try {
@@ -203,6 +192,20 @@ export async function extractAndMerge(params: {
           result.entitiesCreated++;
         } else {
           result.entitiesUpdated++;
+        }
+
+        // Record each extracted entity summary as a fact assertion
+        if (extracted.summary) {
+          try {
+            params.engine.recordAssertion({
+              entityId: entity.id,
+              assertionText: extracted.summary,
+              confidence: extracted.confidence ?? 1.0,
+            });
+            result.assertionsRecorded++;
+          } catch (err) {
+            result.errors.push(`Assertion recording failed for "${extracted.name}": ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
       } catch (err) {
         result.errors.push(`Entity upsert failed for "${extracted.name}": ${err instanceof Error ? err.message : String(err)}`);
@@ -245,10 +248,32 @@ export async function extractAndMerge(params: {
       }
     }
 
+    // Process contradictions as supersession proposals (NOT direct invalidations)
+    for (const contradiction of extraction.contradictions) {
+      try {
+        const matches = params.engine.findEntities({
+          name: contradiction.existingEntityName,
+          type: contradiction.existingEntityType,
+          activeOnly: true,
+          limit: 1,
+        });
+        if (matches.length > 0) {
+          params.engine.createSupersessionProposal({
+            targetEntityId: matches[0]!.id,
+            newAssertionText: contradiction.newInfo,
+            reason: contradiction.reason,
+          });
+          result.supersessionProposals++;
+        }
+      } catch (err) {
+        result.errors.push(`Supersession proposal failed for "${contradiction.existingEntityName}": ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     // Record episode
     try {
       const entityIds = Array.from(nameToId.values());
-      params.engine.recordEpisode({
+      const episode = params.engine.recordEpisode({
         sessionKey: params.sessionKey,
         turnIndex: params.turnIndex,
         content: params.transcript.length > 2000
@@ -256,6 +281,20 @@ export async function extractAndMerge(params: {
           : params.transcript,
         extractedEntityIds: entityIds,
       });
+
+      // Record text unit for provenance tracking
+      try {
+        params.engine.recordTextUnit({
+          episodeId: episode.id,
+          content: params.transcript.length > 4000
+            ? params.transcript.slice(0, 4000) + "..."
+            : params.transcript,
+          turnIndex: params.turnIndex,
+        });
+      } catch {
+        // Non-fatal: text unit is supplementary
+      }
+
       result.episodeRecorded = true;
     } catch (err) {
       result.errors.push(`Episode recording failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -291,8 +330,8 @@ function parseExtractionResult(raw: string): ExtractionResult {
   return {
     entities: Array.isArray(parsed.entities) ? (parsed.entities as ExtractedEntity[]) : [],
     relations: Array.isArray(parsed.relations) ? (parsed.relations as ExtractedRelation[]) : [],
-    invalidations: Array.isArray(parsed.invalidations)
-      ? (parsed.invalidations as ExtractionResult["invalidations"])
+    contradictions: Array.isArray(parsed.contradictions)
+      ? (parsed.contradictions as ExtractionResult["contradictions"])
       : [],
   };
 }

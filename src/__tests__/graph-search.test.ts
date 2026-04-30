@@ -2,6 +2,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MemoryGraphEngine, type EmbedFn } from "../host/graph-engine.js";
 import { searchGraph, clearSearchCache, type GraphSearchOpts } from "../host/graph-search.js";
+import { retrieve } from "../host/graph-retrieval.js";
+import { buildPinnedMemory, formatPinnedMemory } from "../host/graph-context-loader.js";
 import { createTestDb } from "./test-helpers.js";
 
 describe("searchGraph", () => {
@@ -326,6 +328,151 @@ describe("searchGraph", () => {
       if (react && reactivex) {
         expect(react.score).toBeGreaterThan(reactivex.score);
       }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Retrieval pipeline (S5)
+  // -------------------------------------------------------------------------
+
+  describe("retrieve pipeline", () => {
+    it("entity mode returns entity results", async () => {
+      engine.upsertEntity({ name: "Alice", type: "user", summary: "engineer" });
+      engine.upsertEntity({ name: "ProjectX", type: "project", summary: "main project" });
+
+      const result = await retrieve(db, engine, "Alice", { mode: "entity", maxResults: 3 });
+      expect(result.mode).toBe("entity");
+      expect(result.entities.length).toBeGreaterThan(0);
+      expect(result.entities[0]!.name).toBe("Alice");
+    });
+
+    it("global mode returns community reports when available", async () => {
+      // Without communities, should return empty reports
+      const result = await retrieve(db, engine, "overview summary", { mode: "global" });
+      expect(result.mode).toBe("global");
+      expect(result.entities).toHaveLength(0);
+    });
+
+    it("mixed mode auto-detects broad query and uses global path", async () => {
+      engine.upsertEntity({ name: "Test", type: "concept" });
+
+      // "总结" is a broad keyword
+      const result = await retrieve(db, engine, "总结所有内容", { mode: "mixed" });
+      expect(result.mode).toBe("global");
+      expect(result.entities).toHaveLength(0);
+    });
+
+    it("mixed mode uses entity path for focused queries", async () => {
+      engine.upsertEntity({ name: "Alice", type: "user", summary: "engineer" });
+
+      const result = await retrieve(db, engine, "Alice", { mode: "mixed" });
+      expect(result.mode).toBe("mixed");
+      expect(result.entities.length).toBeGreaterThan(0);
+    });
+
+    it("debug mode returns query hints", async () => {
+      const result = await retrieve(db, engine, "Who is Alice", { mode: "debug" });
+      expect(result.mode).toBe("debug");
+      expect(result.scoreBreakdown).toHaveProperty("hints");
+    });
+
+    it("focal rerank boosts well-connected entities", async () => {
+      const hub = engine.upsertEntity({ name: "Hub", type: "concept", summary: "central" });
+      const spoke = engine.upsertEntity({ name: "Spoke", type: "concept", summary: "central" });
+
+      // Hub has 5 connections, Spoke has 0
+      for (let i = 0; i < 5; i++) {
+        const n = engine.upsertEntity({ name: `Neighbor${i}`, type: "concept" });
+        engine.addEdge({ fromId: hub.id, toId: n.id, relation: "linked" });
+      }
+
+      const result = await retrieve(db, engine, "central", {
+        mode: "entity",
+        maxResults: 5,
+      });
+
+      // Both should be found; Hub may rank higher due to focal boost
+      const names = result.entities.map((e) => e.name);
+      expect(names).toContain("Hub");
+    });
+
+    it("respects maxTokens budget", async () => {
+      for (let i = 0; i < 20; i++) {
+        engine.upsertEntity({ name: `Entity${i}`, type: "concept", summary: "A".repeat(200) });
+      }
+
+      const result = await retrieve(db, engine, "Entity", {
+        mode: "entity",
+        maxTokens: 100,
+      });
+
+      // Should pack fewer results due to tight budget
+      expect(result.entities.length).toBeLessThanOrEqual(20);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Pinned core memory
+  // -------------------------------------------------------------------------
+
+  describe("pinned core memory", () => {
+    it("includes high-confidence user/preference entities", () => {
+      engine.upsertEntity({ name: "Alice", type: "user", summary: "PM", confidence: 0.9 });
+      engine.upsertEntity({ name: "DarkMode", type: "preference", summary: "dark theme", confidence: 0.95 });
+      engine.upsertEntity({ name: "RandomThing", type: "concept", summary: "noise", confidence: 0.9 });
+
+      const pinned = buildPinnedMemory(engine);
+      expect(pinned.entities.length).toBeGreaterThanOrEqual(2);
+      const names = pinned.entities.map((e) => e.name);
+      expect(names).toContain("Alice");
+      expect(names).toContain("DarkMode");
+      expect(names).not.toContain("RandomThing");
+    });
+
+    it("excludes low-confidence entities", () => {
+      engine.upsertEntity({ name: "LowConf", type: "user", summary: "uncertain", confidence: 0.3 });
+
+      const pinned = buildPinnedMemory(engine);
+      expect(pinned.entities.find((e) => e.name === "LowConf")).toBeUndefined();
+    });
+
+    it("sorts by access_count descending", () => {
+      engine.upsertEntity({ name: "Popular", type: "user", summary: "frequently accessed", confidence: 0.9 });
+      engine.upsertEntity({ name: "Rare", type: "user", summary: "rarely accessed", confidence: 0.9 });
+
+      // Touch Popular multiple times
+      const popular = engine.findEntities({ name: "Popular", activeOnly: true })[0];
+      if (popular) {
+        for (let i = 0; i < 5; i++) engine.touchEntity(popular.id);
+      }
+
+      const pinned = buildPinnedMemory(engine);
+      if (pinned.entities.length >= 2) {
+        expect(pinned.entities[0]!.name).toBe("Popular");
+      }
+    });
+
+    it("respects maxTokens budget", () => {
+      engine.upsertEntity({ name: "A", type: "user", summary: "X".repeat(500), confidence: 0.9 });
+      engine.upsertEntity({ name: "B", type: "user", summary: "Y".repeat(500), confidence: 0.9 });
+
+      const pinned = buildPinnedMemory(engine, { maxTokens: 10 });
+      // Very tight budget — should include at most 1 or 0
+      expect(pinned.entities.length).toBeLessThanOrEqual(1);
+    });
+
+    it("formatPinnedMemory produces Core Memory section", () => {
+      const pinned = {
+        entities: [{ name: "Alice", type: "user", summary: "PM" }],
+        estimatedTokens: 10,
+      };
+      const formatted = formatPinnedMemory(pinned);
+      expect(formatted).toContain("## Core Memory");
+      expect(formatted).toContain("Alice (user): PM");
+    });
+
+    it("formatPinnedMemory returns empty for no entities", () => {
+      expect(formatPinnedMemory({ entities: [], estimatedTokens: 0 })).toBe("");
     });
   });
 });

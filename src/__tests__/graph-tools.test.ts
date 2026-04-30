@@ -8,6 +8,12 @@ import {
   memoryGraph,
   memoryInvalidate,
   memoryConsolidate,
+  memoryEpisodes,
+  memoryTextUnits,
+  memoryProposals,
+  memoryResolveProposal,
+  memoryRebuildIndex,
+  memoryStats,
 } from "../host/graph-tools.js";
 import { createTestDb } from "./test-helpers.js";
 
@@ -217,6 +223,242 @@ describe("graph-tools", () => {
     it("supports dry run", () => {
       const result = memoryConsolidate(engine, { dryRun: true });
       expect(result.errors).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // memoryEpisodes
+  // -------------------------------------------------------------------------
+
+  describe("memoryEpisodes", () => {
+    it("returns empty list when no episodes", () => {
+      const result = memoryEpisodes(engine, {});
+      expect(result.episodes).toEqual([]);
+      expect(result.total).toBe(0);
+    });
+
+    it("lists episodes for a session", () => {
+      engine.recordEpisode({ sessionKey: "s1", content: "hello" });
+      engine.recordEpisode({ sessionKey: "s1", content: "world" });
+      engine.recordEpisode({ sessionKey: "s2", content: "other" });
+
+      const result = memoryEpisodes(engine, { sessionKey: "s1" });
+      expect(result.episodes).toHaveLength(2);
+      expect(result.total).toBe(2);
+      expect(result.episodes[0]!.sessionKey).toBe("s1");
+    });
+
+    it("lists all episodes without session filter", () => {
+      engine.recordEpisode({ sessionKey: "s1", content: "a" });
+      engine.recordEpisode({ sessionKey: "s2", content: "b" });
+
+      const result = memoryEpisodes(engine, {});
+      expect(result.total).toBe(2);
+    });
+
+    it("respects limit", () => {
+      for (let i = 0; i < 10; i++) {
+        engine.recordEpisode({ sessionKey: "s", content: `ep-${i}` });
+      }
+      const result = memoryEpisodes(engine, { limit: 3 });
+      expect(result.episodes).toHaveLength(3);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // memoryTextUnits
+  // -------------------------------------------------------------------------
+
+  describe("memoryTextUnits", () => {
+    it("returns empty list when no text units", () => {
+      const ep = engine.recordEpisode({ sessionKey: "s1", content: "test" });
+      const result = memoryTextUnits(engine, { episodeId: ep.id });
+      expect(result.units).toEqual([]);
+    });
+
+    it("returns text units for an episode", () => {
+      const ep = engine.recordEpisode({ sessionKey: "s1", content: "test" });
+      engine.recordTextUnit({ episodeId: ep.id, content: "turn 1", speaker: "user" });
+      engine.recordTextUnit({ episodeId: ep.id, content: "turn 2", speaker: "assistant" });
+
+      const result = memoryTextUnits(engine, { episodeId: ep.id });
+      expect(result.units).toHaveLength(2);
+      expect(result.units[0]!.speaker).toBe("user");
+      expect(result.units[1]!.speaker).toBe("assistant");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // memoryProposals
+  // -------------------------------------------------------------------------
+
+  describe("memoryProposals", () => {
+    it("returns empty list when no proposals", () => {
+      const result = memoryProposals(engine, {});
+      expect(result.proposals).toEqual([]);
+    });
+
+    it("lists pending proposals", () => {
+      const entity = engine.upsertEntity({ name: "Test", type: "concept" });
+      engine.createSupersessionProposal({
+        targetEntityId: entity.id,
+        newAssertionText: "updated fact",
+        reason: "new evidence",
+      });
+
+      const result = memoryProposals(engine, { status: "pending" });
+      expect(result.proposals).toHaveLength(1);
+      expect(result.proposals[0]!.status).toBe("pending");
+      expect(result.proposals[0]!.entityName).toBe("Test");
+      expect(result.proposals[0]!.reason).toBe("new evidence");
+    });
+
+    it("filters by status", () => {
+      const entity = engine.upsertEntity({ name: "Test", type: "concept" });
+      const proposal = engine.createSupersessionProposal({
+        targetEntityId: entity.id,
+        newAssertionText: "updated",
+      });
+      engine.resolveSupersession(proposal.id, "approved");
+
+      const pending = memoryProposals(engine, { status: "pending" });
+      expect(pending.proposals).toHaveLength(0);
+
+      const approved = memoryProposals(engine, { status: "approved" });
+      expect(approved.proposals).toHaveLength(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // memoryResolveProposal
+  // -------------------------------------------------------------------------
+
+  describe("memoryResolveProposal", () => {
+    it("approves a pending proposal", () => {
+      const entity = engine.upsertEntity({ name: "Test", type: "concept" });
+      const proposal = engine.createSupersessionProposal({
+        targetEntityId: entity.id,
+        newAssertionText: "updated fact",
+      });
+
+      const result = memoryResolveProposal(engine, {
+        proposalId: proposal.id,
+        decision: "approved",
+      });
+      expect(result.resolved).toBe(true);
+      expect(result.proposalId).toBe(proposal.id);
+      expect(result.decision).toBe("approved");
+    });
+
+    it("rejects a pending proposal", () => {
+      const entity = engine.upsertEntity({ name: "Test", type: "concept" });
+      const proposal = engine.createSupersessionProposal({
+        targetEntityId: entity.id,
+        newAssertionText: "bad update",
+      });
+
+      const result = memoryResolveProposal(engine, {
+        proposalId: proposal.id,
+        decision: "rejected",
+      });
+      expect(result.resolved).toBe(true);
+      expect(result.decision).toBe("rejected");
+    });
+
+    it("returns false for non-existent proposal", () => {
+      const result = memoryResolveProposal(engine, {
+        proposalId: "non-existent-id",
+        decision: "approved",
+      });
+      expect(result.resolved).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // memoryRebuildIndex
+  // -------------------------------------------------------------------------
+
+  describe("memoryRebuildIndex", () => {
+    it("rebuilds FTS index", () => {
+      engine.upsertEntity({ name: "React", type: "concept", summary: "UI lib" });
+      engine.upsertEntity({ name: "Vue", type: "concept", summary: "framework" });
+
+      const result = memoryRebuildIndex(engine, { target: "fts" });
+      expect(result.rebuilt).toContain("fts");
+      expect(result.details.ftsEntities).toBe(2);
+    });
+
+    it("rebuilds vec index", () => {
+      const result = memoryRebuildIndex(engine, { target: "vec" });
+      expect(result.rebuilt).toContain("vec");
+      expect(typeof result.details.vecAvailable).toBe("number");
+    });
+
+    it("rebuilds community index", () => {
+      const a = engine.upsertEntity({ name: "A", type: "concept" });
+      const b = engine.upsertEntity({ name: "B", type: "concept" });
+      engine.addEdge({ fromId: a.id, toId: b.id, relation: "related" });
+
+      const result = memoryRebuildIndex(engine, { target: "community" });
+      expect(result.rebuilt).toContain("community");
+      expect(result.details.communityCount).toBeGreaterThanOrEqual(1);
+    });
+
+    it("rebuilds all indexes", () => {
+      engine.upsertEntity({ name: "X", type: "concept" });
+      const result = memoryRebuildIndex(engine, { target: "all" });
+      expect(result.rebuilt).toContain("fts");
+      expect(result.rebuilt).toContain("vec");
+      expect(result.rebuilt).toContain("community");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // memoryStats
+  // -------------------------------------------------------------------------
+
+  describe("memoryStats", () => {
+    it("returns zero stats for empty graph", () => {
+      const result = memoryStats(engine);
+      expect(result.entities).toBe(0);
+      expect(result.activeEntities).toBe(0);
+      expect(result.edges).toBe(0);
+      expect(result.episodes).toBe(0);
+      expect(result.communities).toBe(0);
+      expect(result.pendingProposals).toBe(0);
+      expect(result.properties).toBe(0);
+    });
+
+    it("counts entities, edges, and episodes", () => {
+      const a = engine.upsertEntity({ name: "A", type: "concept" });
+      const b = engine.upsertEntity({ name: "B", type: "concept" });
+      engine.addEdge({ fromId: a.id, toId: b.id, relation: "related" });
+      engine.recordEpisode({ sessionKey: "s1", content: "test" });
+
+      const result = memoryStats(engine);
+      expect(result.entities).toBe(2);
+      expect(result.activeEntities).toBe(2);
+      expect(result.edges).toBe(1);
+      expect(result.episodes).toBe(1);
+    });
+
+    it("counts pending proposals", () => {
+      const entity = engine.upsertEntity({ name: "Test", type: "concept" });
+      engine.createSupersessionProposal({
+        targetEntityId: entity.id,
+        newAssertionText: "update",
+      });
+
+      const result = memoryStats(engine);
+      expect(result.pendingProposals).toBe(1);
+    });
+
+    it("counts properties", () => {
+      const entity = engine.upsertEntity({ name: "Test", type: "concept" });
+      engine.setProperty(entity.id, { key: "color", value: "blue", type: "string" });
+
+      const result = memoryStats(engine);
+      expect(result.properties).toBe(1);
     });
   });
 });

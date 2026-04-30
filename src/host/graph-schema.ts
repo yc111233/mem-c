@@ -70,6 +70,58 @@ export type EpisodeRow = {
   namespace: string | null;
 };
 
+export type EpisodeTextUnitRow = {
+  id: string;
+  episode_id: string;
+  turn_index: number | null;
+  speaker: string | null;
+  content: string;
+  start_offset: number | null;
+  end_offset: number | null;
+  created_at: number;
+  namespace: string | null;
+};
+
+export type FactAssertionRow = {
+  id: string;
+  entity_id: string;
+  assertion_text: string;
+  confidence: number;
+  status: "active" | "challenged" | "superseded" | "confirmed";
+  source_unit_id: string | null;
+  created_at: number;
+  updated_at: number;
+  namespace: string | null;
+};
+
+export type SupersessionProposalRow = {
+  id: string;
+  target_entity_id: string;
+  target_assertion_id: string | null;
+  new_assertion_text: string;
+  reason: string | null;
+  status: "pending" | "approved" | "rejected";
+  evidence_unit_id: string | null;
+  created_at: number;
+  resolved_at: number | null;
+  namespace: string | null;
+};
+
+export type EntityPropertyRow = {
+  id: string;
+  entity_id: string;
+  key: string;
+  value: string;
+  value_type: "string" | "number" | "boolean" | "date";
+  confidence: number;
+  source_unit_id: string | null;
+  valid_from: number;
+  valid_until: number | null;
+  created_at: number;
+  updated_at: number;
+  namespace: string | null;
+};
+
 // ---------------------------------------------------------------------------
 // FTS virtual table for entity search
 // ---------------------------------------------------------------------------
@@ -174,10 +226,13 @@ export function ensureGraphSchema(params: {
       alias TEXT NOT NULL,
       entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
       created_at INTEGER NOT NULL,
+      namespace TEXT,
       PRIMARY KEY (alias, entity_id)
     );
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_aliases_entity ON entity_aliases(entity_id);`);
+  try { db.exec(`ALTER TABLE entity_aliases ADD COLUMN namespace TEXT`); } catch { /* already exists */ }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_aliases_ns ON entity_aliases(namespace);`);
 
   // -- meta (for invalidation audit) ------------------------------------------
   db.exec(`
@@ -187,6 +242,82 @@ export function ensureGraphSchema(params: {
     );
   `);
 
+  // -- episode_text_units (provenance: source text fragments) ------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS episode_text_units (
+      id TEXT PRIMARY KEY,
+      episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+      turn_index INTEGER,
+      speaker TEXT,
+      content TEXT NOT NULL,
+      start_offset INTEGER,
+      end_offset INTEGER,
+      created_at INTEGER NOT NULL,
+      namespace TEXT
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_etu_episode ON episode_text_units(episode_id);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_etu_ns ON episode_text_units(namespace);`);
+
+  // -- fact_assertions (provenance: extracted facts) --------------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS fact_assertions (
+      id TEXT PRIMARY KEY,
+      entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      assertion_text TEXT NOT NULL,
+      confidence REAL NOT NULL DEFAULT 1.0,
+      status TEXT NOT NULL DEFAULT 'active',
+      source_unit_id TEXT REFERENCES episode_text_units(id),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      namespace TEXT
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_fa_entity ON fact_assertions(entity_id);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_fa_status ON fact_assertions(status);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_fa_ns ON fact_assertions(namespace);`);
+
+  // -- supersession_proposals (provenance: conflict resolution) ---------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS supersession_proposals (
+      id TEXT PRIMARY KEY,
+      target_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      target_assertion_id TEXT REFERENCES fact_assertions(id),
+      new_assertion_text TEXT NOT NULL,
+      reason TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      evidence_unit_id TEXT REFERENCES episode_text_units(id),
+      created_at INTEGER NOT NULL,
+      resolved_at INTEGER,
+      namespace TEXT
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sp_target ON supersession_proposals(target_entity_id);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sp_status ON supersession_proposals(status);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sp_ns ON supersession_proposals(namespace);`);
+
+  // -- entity_properties (typed key-value properties) -----------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS entity_properties (
+      id TEXT PRIMARY KEY,
+      entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      value_type TEXT NOT NULL DEFAULT 'string',
+      confidence REAL NOT NULL DEFAULT 1.0,
+      source_unit_id TEXT,
+      valid_from INTEGER NOT NULL,
+      valid_until INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      namespace TEXT
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ep_entity ON entity_properties(entity_id);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ep_key ON entity_properties(key);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ep_valid ON entity_properties(valid_from, valid_until);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ep_ns ON entity_properties(namespace);`);
+
   // -- communities -----------------------------------------------------------
   db.exec(`
     CREATE TABLE IF NOT EXISTS communities (
@@ -194,10 +325,16 @@ export function ensureGraphSchema(params: {
       label TEXT,
       entity_count INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      namespace TEXT
     );
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_communities_updated ON communities(updated_at);`);
+  try { db.exec(`ALTER TABLE communities ADD COLUMN namespace TEXT`); } catch { /* already exists */ }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_communities_ns ON communities(namespace);`);
+
+  // Report summary for community retrieval (2-3 sentence description)
+  try { db.exec(`ALTER TABLE communities ADD COLUMN report_summary TEXT`); } catch { /* already exists */ }
 
   // -- community_members -----------------------------------------------------
   db.exec(`
@@ -216,9 +353,10 @@ export function ensureGraphSchema(params: {
   const ftsEnabled = params.ftsEnabled ?? true;
   if (ftsEnabled) {
     try {
+      // Try to create FTS5 table with namespace support
       db.exec(
         `CREATE VIRTUAL TABLE IF NOT EXISTS ${ENTITY_FTS_TABLE} USING fts5(` +
-          `name, summary, id UNINDEXED, type UNINDEXED);`,
+          `name, summary, id UNINDEXED, type UNINDEXED, namespace UNINDEXED);`,
       );
       entityFtsAvailable = true;
     } catch (err) {
@@ -301,12 +439,12 @@ export function ensureGraphSchema(params: {
 /** Sync an entity row into the FTS index (upsert). */
 export function syncEntityFts(
   db: DatabaseSync,
-  entity: Pick<EntityRow, "id" | "name" | "summary">,
+  entity: Pick<EntityRow, "id" | "name" | "summary"> & { namespace?: string | null },
 ): void {
   db.prepare(`DELETE FROM ${ENTITY_FTS_TABLE} WHERE id = ?`).run(entity.id);
   db.prepare(
-    `INSERT INTO ${ENTITY_FTS_TABLE}(name, summary, id, type) ` +
-      `SELECT ?, ?, ?, type FROM entities WHERE id = ?`,
+    `INSERT INTO ${ENTITY_FTS_TABLE}(name, summary, id, type, namespace) ` +
+      `SELECT ?, ?, ?, type, namespace FROM entities WHERE id = ?`,
   ).run(entity.name, entity.summary ?? "", entity.id, entity.id);
 }
 
@@ -332,11 +470,28 @@ export function sanitizeFtsQuery(query: string): string {
 export function searchEntityFts(
   db: DatabaseSync,
   query: string,
-  opts?: { limit?: number },
+  opts?: { limit?: number; namespace?: string | null },
 ): Array<{ id: string; rank: number }> {
   const sanitized = sanitizeFtsQuery(query);
   if (!sanitized) return [];
   const limit = opts?.limit ?? 20;
+  const namespace = opts?.namespace;
+
+  if (namespace !== undefined) {
+    // Namespace-scoped search
+    const nsFilter = namespace === null ? `namespace IS NULL` : `namespace = ?`;
+    const params = namespace === null
+      ? [sanitized, limit]
+      : [sanitized, namespace, limit];
+    const rows = db
+      .prepare(
+        `SELECT id, rank FROM ${ENTITY_FTS_TABLE} WHERE ${ENTITY_FTS_TABLE} MATCH ? AND ${nsFilter} ORDER BY rank LIMIT ?`,
+      )
+      .all(...params) as Array<{ id: string; rank: number }>;
+    return rows;
+  }
+
+  // Unscoped search (legacy)
   const rows = db
     .prepare(
       `SELECT id, rank FROM ${ENTITY_FTS_TABLE} WHERE ${ENTITY_FTS_TABLE} MATCH ? ORDER BY rank LIMIT ?`,

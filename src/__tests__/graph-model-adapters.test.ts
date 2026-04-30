@@ -103,9 +103,9 @@ describe("graph-model-adapters", () => {
   });
 
   describe("createSummarizeFn", () => {
-    it("returns a function that calls chatCompletion", async () => {
+    it("returns a function that calls chatCompletion and parses JSON", async () => {
       const { chatCompletion } = await import("../host/graph-llm-client.js");
-      vi.mocked(chatCompletion).mockResolvedValueOnce("Frontend Tech");
+      vi.mocked(chatCompletion).mockResolvedValueOnce('{"label": "Frontend Tech", "summary": "React and Vue are frontend frameworks."}');
 
       const fn = createSummarizeFn(mockConfig);
       const result = await fn({
@@ -116,7 +116,24 @@ describe("graph-model-adapters", () => {
         relations: [{ from: "React", to: "Vue", relation: "relates_to" }],
       });
 
-      expect(result).toBe("Frontend Tech");
+      expect(result.label).toBe("Frontend Tech");
+      expect(result.summary).toBe("React and Vue are frontend frameworks.");
+    });
+
+    it("falls back gracefully for non-JSON responses", async () => {
+      const { chatCompletion } = await import("../host/graph-llm-client.js");
+      vi.mocked(chatCompletion).mockResolvedValueOnce("Frontend Tech");
+
+      const fn = createSummarizeFn(mockConfig);
+      const result = await fn({
+        entities: [
+          { name: "React", type: "concept", summary: "UI library" },
+        ],
+        relations: [],
+      });
+
+      expect(result.label).toBe("Frontend Tech");
+      expect(result.summary).toBe("Frontend Tech");
     });
   });
 
