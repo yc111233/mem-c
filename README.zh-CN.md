@@ -232,17 +232,6 @@ const result = await migrateMarkdownMemory({
 // 将 memory/*.md 文件（含 frontmatter）导入图谱
 ```
 
-## 与 OpenViking 协同
-
-本库与 [OpenViking](https://github.com/nicepkg/openviking) 互补 — 建议配合使用：
-
-| 查询类型 | 最佳工具 |
-|---------|---------|
-| "找相似的对话" | OpenViking 向量搜索 |
-| "Alice 的项目和决策历史？" | 图谱遍历 |
-| "这个事实何时发生了变化？" | 时序版本追溯 |
-
-两者均使用 SQLite，可共享同一数据库目录。
 
 ## 环境要求
 

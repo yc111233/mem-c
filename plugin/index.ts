@@ -5,9 +5,7 @@
  * Provides tools (search/store/batch/detail/graph/invalidate/consolidate/community/path/export),
  * lifecycle hooks (auto-recall/auto-extract), and CLI commands.
  *
- * Designed to run alongside memory-viking — complementary, not competing:
- * - OpenViking: raw conversation storage + semantic vector search
- * - This plugin: structured knowledge graph + temporal versioning + graph traversal
+ * Hybrid retrieval: vector (sqlite-vec ANN) + FTS5 + graph traversal + temporal decay.
  */
 
 import { mkdirSync } from "node:fs";

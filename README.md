@@ -297,17 +297,6 @@ const { port, close } = await startRestServer({ port: 3000 });
 // GET  /health           — server stats
 ```
 
-## OpenViking Synergy
-
-This library complements [OpenViking](https://github.com/nicepkg/openviking) — use both together:
-
-| Query Type | Best Tool |
-|-----------|-----------|
-| "Find similar conversations" | OpenViking vector search |
-| "Alice's projects and decisions?" | Graph traversal |
-| "When did this fact change?" | Temporal version history |
-
-Both use SQLite and can share the same database directory.
 
 ## Requirements
 
