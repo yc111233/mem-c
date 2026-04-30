@@ -73,6 +73,11 @@
   "bugs": {
     "url": "https://github.com/yc111233/mem-c/issues"
   },
+  "openclaw": {
+    "extensions": [
+      "./plugin/index.ts"
+    ]
+  },
   "engines": {
     "node": ">=22.0.0"
   },

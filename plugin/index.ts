@@ -127,10 +127,9 @@ function extractLatestUserText(messages?: unknown[]): string {
 // ---------------------------------------------------------------------------
 
 export default {
-  id: "memory-graph",
-  name: "Memory (Knowledge Graph)",
+  id: "mem-c",
+  name: "MEM-C",
   description: "Temporal knowledge graph memory with hybrid retrieval",
-  kind: "memory" as const,
 
   register(api: OpenClawPluginApi) {
     const cfg = memoryGraphConfigSchema.parse(api.pluginConfig);
@@ -151,7 +150,7 @@ export default {
     const { entityFtsAvailable } = ensureGraphSchema({ db, engine });
 
     if (!entityFtsAvailable) {
-      api.logger.warn("memory-graph: FTS5 unavailable, falling back to LIKE search");
+      api.logger.warn("mem-c: FTS5 unavailable, falling back to LIKE search");
     }
 
     // ========================================================================
@@ -544,7 +543,7 @@ export default {
           : budget.l0;
 
         if (compactionDetected) {
-          api.logger.info("memory-graph: compaction detected, boosting L0 context");
+          api.logger.info("mem-c: compaction detected, boosting L0 context");
         }
 
         // Extract latest user query for query-aware injection
@@ -617,7 +616,7 @@ export default {
         // llmExtract must be provided by the host runtime
         const llmExtract = eventObj.llmExtract;
         if (!llmExtract) {
-          api.logger.warn("memory-graph: auto-extract skipped — no llmExtract function provided");
+          api.logger.warn("mem-c: auto-extract skipped — no llmExtract function provided");
           return;
         }
 
@@ -635,7 +634,7 @@ export default {
           });
 
           api.logger.info(
-            `memory-graph: extracted ${result.entitiesCreated} new + ${result.entitiesUpdated} updated entities, ` +
+            `mem-c: extracted ${result.entitiesCreated} new + ${result.entitiesUpdated} updated entities, ` +
               `${result.edgesCreated} edges, ${result.invalidated} invalidations` +
               (result.errors.length > 0 ? ` (${result.errors.length} errors)` : ""),
           );
@@ -653,15 +652,15 @@ export default {
                 .run(String(Date.now()));
               if (cr.merged + cr.decayed + cr.pruned > 0) {
                 api.logger.info(
-                  `memory-graph: auto-consolidation — ${cr.merged} merged, ${cr.decayed} decayed, ${cr.pruned} pruned`,
+                  `mem-c: auto-consolidation — ${cr.merged} merged, ${cr.decayed} decayed, ${cr.pruned} pruned`,
                 );
               }
             }
           } catch (err) {
-            api.logger.warn(`memory-graph: auto-consolidation failed: ${err instanceof Error ? err.message : String(err)}`);
+            api.logger.warn(`mem-c: auto-consolidation failed: ${err instanceof Error ? err.message : String(err)}`);
           }
         } catch (err) {
-          api.logger.warn(`memory-graph: auto-extract failed: ${err instanceof Error ? err.message : String(err)}`);
+          api.logger.warn(`mem-c: auto-extract failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       });
     }
@@ -691,10 +690,10 @@ export default {
             llmExtract,
             existingEntityNames: existingNames,
           });
-          api.logger.info("memory-graph: pre-compaction extraction complete");
+          api.logger.info("mem-c: pre-compaction extraction complete");
         } catch (err) {
           api.logger.warn(
-            `memory-graph: pre-compaction extraction failed: ${err instanceof Error ? err.message : String(err)}`,
+            `mem-c: pre-compaction extraction failed: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       });
@@ -705,17 +704,17 @@ export default {
     // ========================================================================
 
     api.registerService({
-      id: "memory-graph",
+      id: "mem-c",
       start: async () => {
         const stats = engine.stats();
         api.logger.info(
-          `memory-graph: initialized (${stats.activeEntities} active entities, ` +
+          `mem-c: initialized (${stats.activeEntities} active entities, ` +
             `${stats.edges} edges, FTS: ${entityFtsAvailable ? "yes" : "no"})`,
         );
       },
       stop: () => {
         db.close();
-        api.logger.info("memory-graph: database closed");
+        api.logger.info("mem-c: database closed");
       },
     });
   },
