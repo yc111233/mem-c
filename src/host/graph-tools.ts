@@ -22,6 +22,31 @@ import {
   type L2DetailLevel,
 } from "./graph-context-loader.js";
 
+type ResolvedEntity = NonNullable<ReturnType<MemoryGraphEngine["getEntity"]>>;
+
+type ResolveEntityOptions = {
+  type?: EntityInput["type"];
+};
+
+function resolveEntity(
+  engine: MemoryGraphEngine,
+  identifier: string,
+  options?: ResolveEntityOptions,
+): ResolvedEntity | null {
+  const entity = engine.getEntity(identifier);
+  if (entity) {
+    return entity;
+  }
+
+  const matches = engine.findEntities({
+    name: identifier,
+    type: options?.type,
+    activeOnly: true,
+    limit: 1,
+  });
+  return matches[0] ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Tool: memory_graph_search
 // ---------------------------------------------------------------------------
@@ -164,19 +189,7 @@ export function memoryDetail(
   engine: MemoryGraphEngine,
   input: MemoryDetailInput,
 ): MemoryDetailOutput {
-  // Try as ID first
-  let entity = engine.getEntity(input.entity);
-
-  // Fall back to name search
-  if (!entity) {
-    const matches = engine.findEntities({
-      name: input.entity,
-      type: input.type as EntityInput["type"],
-      activeOnly: true,
-      limit: 1,
-    });
-    entity = matches[0] ?? null;
-  }
+  const entity = resolveEntity(engine, input.entity, { type: input.type as EntityInput["type"] });
 
   if (!entity) {
     return { found: false, formatted: `No entity found matching "${input.entity}"` };
@@ -219,12 +232,7 @@ export function memoryGraph(
   engine: MemoryGraphEngine,
   input: MemoryGraphInput,
 ): MemoryGraphOutput {
-  // Resolve entity
-  let entity = engine.getEntity(input.entity);
-  if (!entity) {
-    const matches = engine.findEntities({ name: input.entity, activeOnly: true, limit: 1 });
-    entity = matches[0] ?? null;
-  }
+  const entity = resolveEntity(engine, input.entity);
 
   if (!entity) {
     return {
@@ -293,16 +301,7 @@ export function memoryInvalidate(
   engine: MemoryGraphEngine,
   input: MemoryInvalidateInput,
 ): MemoryInvalidateOutput {
-  let entity = engine.getEntity(input.entity);
-  if (!entity) {
-    const matches = engine.findEntities({
-      name: input.entity,
-      type: input.type as EntityInput["type"],
-      activeOnly: true,
-      limit: 1,
-    });
-    entity = matches[0] ?? null;
-  }
+  const entity = resolveEntity(engine, input.entity, { type: input.type as EntityInput["type"] });
 
   if (!entity) {
     return { invalidated: false, reason: `No active entity found matching "${input.entity}"` };
@@ -470,17 +469,8 @@ export function memoryFindPaths(
   engine: MemoryGraphEngine,
   input: MemoryFindPathsInput,
 ): MemoryFindPathsOutput {
-  // Resolve from/to by name or ID
-  let fromEntity = engine.getEntity(input.from);
-  if (!fromEntity) {
-    const matches = engine.findEntities({ name: input.from, activeOnly: true, limit: 1 });
-    fromEntity = matches[0] ?? null;
-  }
-  let toEntity = engine.getEntity(input.to);
-  if (!toEntity) {
-    const matches = engine.findEntities({ name: input.to, activeOnly: true, limit: 1 });
-    toEntity = matches[0] ?? null;
-  }
+  const fromEntity = resolveEntity(engine, input.from);
+  const toEntity = resolveEntity(engine, input.to);
 
   if (!fromEntity || !toEntity) {
     return {
@@ -545,11 +535,7 @@ export function memoryExportGraph(
 ): MemoryExportGraphOutput {
   let centerEntityId: string | undefined;
   if (input.centerEntity) {
-    let entity = engine.getEntity(input.centerEntity);
-    if (!entity) {
-      const matches = engine.findEntities({ name: input.centerEntity, activeOnly: true, limit: 1 });
-      entity = matches[0] ?? null;
-    }
+    const entity = resolveEntity(engine, input.centerEntity);
     centerEntityId = entity?.id;
   }
 

@@ -9,3 +9,6 @@ CLAUDE.md
 .memsearch/
 .claude/
 docs/superpowers/
+
+# Working artifacts (not part of the product)
+workspace/

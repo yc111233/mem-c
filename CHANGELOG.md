@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.1.0] - 2026-05-01
+
+### Added
+- **Built-in model config**: `mem-c.config.json` supports `chat`, `embedding`, and `rerank` providers. Plugin auto-uses built-in LLM for extraction/inference without host callbacks.
+- **Rerank pipeline**: OpenAI-compatible rerank API integration with `rerankFn` wired into search.
+- **DashScope native embedding**: Support DashScope embedding API (multimodal) alongside OpenAI-compatible endpoints.
+- **CI verification workflow**: GitHub Actions workflow for automated checks.
+
+### Fixed
+- Plugin config reads from `entries["mem-c"].config` instead of `api.config`.
+- Cache scoping: search cache isolates per-database, includes rerank state in cache key.
+- `memoryBatchStore` execute signature aligned to `(toolCallId, params)`.
+- sqlite-vec extension resolves from module location, not cwd.
+- DashScope multimodal embedding uses `input.contents` not `input.texts`.
+- Float32 hash for embedding vectors (was Float64).
+
+### Changed
+- Plugin doc surface aligned: event emissions on entity/edge lifecycle, consistent async signatures.
+
 ## [1.0.0] - 2026-04-28
 
 ### Added
