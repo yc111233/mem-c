@@ -2,14 +2,15 @@
 
 面向 AI 智能体的时序知识图谱记忆系统 — 基于 SQLite，零基础设施，混合检索（向量 + 全文 + 图遍历）、MCP Server、文档导入、备份恢复。
 
-[English](./README.md)
+**v1.1.0** | [API 文档](./docs/api-reference.md) | [快速上手](./docs/getting-started.md) | [English](./README.md)
 
 ## 特性
 
 **核心**
 - **时序版本管理** — 实体和边使用 `valid_from` / `valid_until` 标记，追踪事实的变化历程
 - **混合检索** — 向量相似度 + FTS5 全文搜索 + 图连通性 + 时间衰减评分
-- **分层上下文加载** — L0（实体名册）/ L1（搜索结果）/ L2（完整详情）
+- **分层上下文加载** — L0（实体名册，~200 tokens）/ L1（搜索结果，~800 tokens）/ L2（完整详情，~2000 tokens）
+- **实体重要性评分** — 综合指标（时效性 + 度中心性 + 访问频率 + 置信度）
 - **图谱整合** — 自动合并重复、衰减过时、清理孤立实体
 - **LLM 自动抽取** — 从对话文本中自动提取实体和关系
 - **零基础设施** — 纯 `node:sqlite`（Node 22+），无需外部数据库
@@ -22,7 +23,7 @@
 - **搜索缓存** — LRU 缓存（128 条，30s TTL），写入自动失效
 
 **图谱智能（v0.5+）**
-- **社区检测** — BFS 连通分量算法，存储到 `communities` 表
+- **社区检测** — BFS 连通分量算法，存储到 `communities` / `community_members` 表
 - **多跳路径查找** — BFS + 环路发现，任意两实体间路径
 - **可视化导出** — Mermaid / DOT / JSON 格式
 - **社区摘要** — LLM 为每个社区集群生成标签
@@ -34,11 +35,28 @@
 - **事件驱动 API** — 类型安全的 `GraphEventEmitter`，7 种生命周期事件
 - **REST API** — HTTP 接口，供非 Node.js 环境使用（8 个端点，零依赖）
 
+**模型集成（v1.1+）**
+- **内置模型配置** — `mem-c.config.json` 配置 chat/embedding/rerank provider，插件自动使用内置 LLM，无需宿主传入 callback
+- **Rerank 管线** — OpenAI 兼容的 rerank API，提升搜索相关性
+- **DashScope 原生嵌入** — 支持 DashScope 多模态嵌入 + OpenAI 兼容端点
+
+**文档导入（v1.0+）**
+- **统一导入 API** — `importDocument()` 支持 Markdown、PDF、飞书、聊天记录
+- **智能分块** — 按语义边界切分（段落 > 句子 > 硬切）
+- **导入进度追踪** — `import_sessions` 表，支持断点续传
+- **备份与恢复** — 增量备份、时间点恢复
+
 **安全**
 - **边去重** — 自动合并重复边并更新权重
 - **二进制嵌入存储** — BLOB 存储，节省约 60% 空间
 - **FTS 查询安全** — 防止特殊字符导致崩溃
 - **多进程安全** — WAL 日志模式 + busy_timeout
+
+## 安装
+
+```bash
+npm install mem-c
+```
 
 ## 架构
 
@@ -50,6 +68,11 @@ src/host/
 ├── graph-context-loader.ts # L0/L1/L2 分层上下文加载
 ├── graph-consolidator.ts   # 图谱卫生：合并、衰减、清理
 ├── graph-extractor.ts      # LLM 实体/关系抽取
+├── graph-import.ts         # 文档导入管线（Markdown、PDF、飞书、聊天）
+├── graph-backup.ts         # 备份与恢复（增量、时间点）
+├── graph-llm-client.ts     # 内置 LLM 客户端（chat/embedding/rerank）
+├── graph-model-config.ts   # 模型 provider 配置
+├── graph-model-adapters.ts # Provider 适配器（OpenAI 兼容、DashScope）
 ├── graph-migrate.ts        # Markdown 记忆 → 图谱迁移
 ├── graph-tools.ts          # 智能体工具接口
 ├── graph-vec.ts            # sqlite-vec ANN 适配器
@@ -88,7 +111,7 @@ engine.invalidateEntity(project.id, "project completed");
 const history = engine.getEntityHistory("GraphDB"); // 查看所有版本
 ```
 
-### 嵌入函数钩子 (v0.3+)
+### 嵌入函数钩子（v0.3+）
 
 ```typescript
 import { MemoryGraphEngine } from "mem-c";
@@ -110,7 +133,7 @@ const results = searchGraph(db, engine, "JavaScript 框架");
 // 无需手动传入 queryEmbedding
 ```
 
-### 实体别名 (v0.3+)
+### 实体别名（v0.3+）
 
 ```typescript
 // 大小写不敏感匹配
@@ -147,19 +170,21 @@ const l2 = buildL2Context(engine, entityId);
 
 ## LLM 抽取
 
-抽取功能需要传入 `llmExtract` 回调函数 — 宿主运行时必须提供此函数
-（mem-c 不内置任何 LLM 客户端）。宿主插件通过 `agent_end` 事件接收该函数；
-独立使用时需自行提供：
+MEM-C 支持两种 LLM 调用模式：
+
+**内置模型（v1.1+）：** 在 `mem-c.config.json` 中配置 chat provider，插件自动使用内置 LLM 执行抽取，无需宿主传入 callback。
+
+**回调注入：** 宿主运行时提供 `llmExtract` 函数。未配置内置模型时使用此方式。
 
 ```typescript
 import { extractAndMerge } from "mem-c";
 
+// 回调模式 — 宿主提供 LLM 调用
 const result = await extractAndMerge({
   engine,
   transcript: "用户讨论了从 REST 迁移到 GraphQL...",
   sessionKey: "session-123",
   llmExtract: async ({ systemPrompt, userPrompt }) => {
-    // 在此调用你的 LLM，返回 JSON 字符串
     return await callLLM(systemPrompt, userPrompt);
   },
 });
@@ -220,18 +245,78 @@ const result = consolidateGraph(engine);
 2. **衰减** — 降低 30+ 天未访问实体的置信度
 3. **清理** — 使低置信度孤立实体失效（无连接，置信度 < 0.3）
 
-## 从 Markdown 迁移
+## 文档导入（v1.0+）
 
 ```typescript
-import { migrateMarkdownMemory } from "mem-c";
+import { importDocument } from "mem-c";
 
-const result = await migrateMarkdownMemory({
+// 导入 Markdown 文件
+const result = await importDocument({
   engine,
-  workspaceDir: "/path/to/workspace",
+  source: "/path/to/notes.md",
+  parser: markdownParser(),
 });
-// 将 memory/*.md 文件（含 frontmatter）导入图谱
+// result: { sessionId, entitiesCreated, edgesCreated, chunksProcessed }
 ```
 
+支持 Markdown、PDF、飞书文档、聊天记录。进度通过 `import_sessions` 表追踪。
+
+## MCP Server（v0.6+）
+
+通过 Model Context Protocol 暴露记忆工具，支持跨 agent 访问：
+
+```typescript
+import { startMcpServer } from "mem-c";
+
+// 在 stdio 上启动 MCP server
+await startMcpServer({ dbPath: "./memory.db" });
+// 9 个工具可用：memory_search, memory_store, memory_detail 等
+```
+
+## 多用户隔离（v0.6+）
+
+按用户隔离数据：
+
+```typescript
+import { MemoryGraphEngine } from "mem-c";
+
+const user1 = new MemoryGraphEngine(db, { namespace: "user-123" });
+const user2 = new MemoryGraphEngine(db, { namespace: "user-456" });
+
+user1.upsertEntity({ name: "Private", type: "concept" });
+user2.findEntities({ name: "Private" }); // → []（隔离）
+```
+
+## 事件驱动 API（v0.6+）
+
+订阅图谱变更事件：
+
+```typescript
+const engine = new MemoryGraphEngine(db);
+engine.getEvents().on("entity:created", (entity) => {
+  console.log("新实体:", entity.name);
+});
+engine.getEvents().on("edge:created", (edge) => {
+  console.log("新关系:", edge.relation);
+});
+```
+
+## REST API（v0.6+）
+
+供非 Node.js 环境使用的 HTTP 接口：
+
+```typescript
+import { startRestServer } from "mem-c";
+
+const { port, close } = await startRestServer({ port: 3000 });
+// GET  /search?q=...       — 混合搜索
+// POST /entities           — 创建实体
+// GET  /entities/:name     — 实体详情
+// GET  /communities        — 社区检测
+// GET  /paths?from=X&to=Y — 路径查找
+// GET  /export?format=mermaid — 图导出
+// GET  /health             — 服务状态
+```
 
 ## 环境要求
 

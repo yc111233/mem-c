@@ -2,7 +2,7 @@
 
 Temporal knowledge graph memory for AI agents — SQLite-based, zero-infrastructure, with hybrid retrieval (vector + FTS + graph traversal), MCP Server, document import, backup/restore.
 
-**v1.0.0** | [API Reference](./docs/api-reference.md) | [Getting Started](./docs/getting-started.md) | [中文文档](./README.zh-CN.md)
+**v1.1.0** | [API Reference](./docs/api-reference.md) | [Getting Started](./docs/getting-started.md) | [中文文档](./README.zh-CN.md)
 
 ## Features
 
@@ -35,6 +35,17 @@ Temporal knowledge graph memory for AI agents — SQLite-based, zero-infrastruct
 - **Event-driven API** — typed `GraphEventEmitter` with 7 lifecycle events
 - **REST API** — HTTP endpoints for non-Node.js consumers (8 routes, zero deps)
 
+**Model Integration (v1.1+)**
+- **Built-in model config** — `mem-c.config.json` configures chat/embedding/rerank providers; plugin auto-uses built-in LLM without host callbacks
+- **Rerank pipeline** — OpenAI-compatible rerank API for improved search relevance
+- **DashScope native embedding** — DashScope multimodal embedding alongside OpenAI-compatible endpoints
+
+**Document Import (v1.0+)**
+- **Unified import API** — `importDocument()` for markdown, PDF, Feishu, and chat history
+- **Smart chunking** — semantic boundary-aware text splitting (paragraph > sentence > hard cut)
+- **Import progress tracking** — `import_sessions` table with resume support
+- **Backup & restore** — incremental backup, point-in-time recovery
+
 **Safety**
 - **Edge deduplication** — automatic merge of duplicate edges with weight updates
 - **Binary embedding storage** — BLOB storage for 60% space reduction vs JSON
@@ -57,6 +68,11 @@ src/host/
 ├── graph-context-loader.ts # L0/L1/L2 tiered context loading
 ├── graph-consolidator.ts   # Graph hygiene: merge duplicates, decay stale, prune orphans
 ├── graph-extractor.ts      # LLM entity/relation extraction
+├── graph-import.ts         # Document import pipeline (markdown, PDF, Feishu, chat)
+├── graph-backup.ts         # Backup & restore (incremental, point-in-time)
+├── graph-llm-client.ts     # Built-in LLM client (chat/embedding/rerank)
+├── graph-model-config.ts   # Model provider configuration
+├── graph-model-adapters.ts # Provider adapters (OpenAI-compatible, DashScope)
 ├── graph-migrate.ts        # Markdown memory → graph migration
 ├── graph-tools.ts          # Agent tool interfaces
 ├── graph-vec.ts            # sqlite-vec ANN adapter
@@ -154,19 +170,21 @@ const l2 = buildL2Context(engine, entityId);
 
 ## LLM Extraction
 
-Extraction requires a `llmExtract` callback — the host runtime must provide this function
-(mem-c does not bundle any LLM client). The host plugin receives it via the
-`agent_end` event; standalone users must supply it directly:
+MEM-C supports two modes for LLM-powered extraction:
+
+**Built-in model (v1.1+):** Configure `mem-c.config.json` with a chat provider — the plugin auto-uses it for extraction, no host callback needed.
+
+**Callback injection:** The host runtime provides an `llmExtract` function. This is the fallback when no built-in model is configured.
 
 ```typescript
 import { extractAndMerge } from "mem-c";
 
+// Callback mode — host provides the LLM call
 const result = await extractAndMerge({
   engine,
   transcript: "User discussed switching from REST to GraphQL...",
   sessionKey: "session-123",
   llmExtract: async ({ systemPrompt, userPrompt }) => {
-    // Call your LLM here, return JSON string
     return await callLLM(systemPrompt, userPrompt);
   },
 });
@@ -228,17 +246,21 @@ Four phases run in a single transaction:
 2. **Decay** — reduce confidence of entities not accessed for 30+ days
 3. **Prune** — invalidate low-confidence orphans (no edges, confidence < 0.3)
 
-## Migration from Markdown
+## Document Import (v1.0+)
 
 ```typescript
-import { migrateMarkdownMemory } from "mem-c";
+import { importDocument } from "mem-c";
 
-const result = await migrateMarkdownMemory({
+// Import a markdown file
+const result = await importDocument({
   engine,
-  workspaceDir: "/path/to/workspace",
+  source: "/path/to/notes.md",
+  parser: markdownParser(),
 });
-// Imports memory/*.md files with frontmatter into the graph
+// result: { sessionId, entitiesCreated, edgesCreated, chunksProcessed }
 ```
+
+Supports markdown, PDF, Feishu documents, and chat history. Progress tracked via `import_sessions` table.
 
 ## MCP Server (v0.6+)
 
@@ -296,7 +318,6 @@ const { port, close } = await startRestServer({ port: 3000 });
 // GET  /export?format=mermaid — graph export
 // GET  /health           — server stats
 ```
-
 
 ## Requirements
 
