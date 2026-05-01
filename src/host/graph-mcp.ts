@@ -19,6 +19,12 @@ import {
   memoryDetectCommunities,
   memoryFindPaths,
   memoryExportGraph,
+  memoryEpisodes,
+  memoryTextUnits,
+  memoryProposals,
+  memoryResolveProposal,
+  memoryRebuildIndex,
+  memoryStats,
 } from "./graph-tools.js";
 
 export type McpServerOpts = {
@@ -150,6 +156,72 @@ export function createMemoryMcpServer(opts?: McpServerOpts): {
     async (params) => {
       const result = memoryExportGraph(engine, params);
       return { content: [{ type: "text" as const, text: result.content }] };
+    },
+  );
+
+  // memory_episodes
+  server.tool(
+    "memory_episodes",
+    "List recorded conversation episodes, optionally filtered by session",
+    { sessionKey: z.string().optional(), limit: z.number().optional() },
+    async (params) => {
+      const result = memoryEpisodes(engine, params);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    },
+  );
+
+  // memory_text_units
+  server.tool(
+    "memory_text_units",
+    "Get text units (conversation turns) for a specific episode",
+    { episodeId: z.string() },
+    async (params) => {
+      const result = memoryTextUnits(engine, params);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    },
+  );
+
+  // memory_proposals
+  server.tool(
+    "memory_proposals",
+    "List supersession proposals for entity updates",
+    { status: z.enum(["pending", "approved", "rejected"]).optional(), limit: z.number().optional() },
+    async (params) => {
+      const result = memoryProposals(engine, params);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    },
+  );
+
+  // memory_resolve_proposal
+  server.tool(
+    "memory_resolve_proposal",
+    "Approve or reject a supersession proposal",
+    { proposalId: z.string(), decision: z.enum(["approved", "rejected"]), reason: z.string().optional() },
+    async (params) => {
+      const result = memoryResolveProposal(engine, params);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    },
+  );
+
+  // memory_rebuild_index
+  server.tool(
+    "memory_rebuild_index",
+    "Rebuild FTS, vector, or community indexes",
+    { target: z.enum(["fts", "vec", "community", "all"]) },
+    async (params) => {
+      const result = memoryRebuildIndex(engine, params);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    },
+  );
+
+  // memory_stats
+  server.tool(
+    "memory_stats",
+    "Get knowledge graph statistics (entities, edges, episodes, communities, proposals, properties)",
+    {},
+    async () => {
+      const result = memoryStats(engine);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     },
   );
 

@@ -8,7 +8,26 @@ import {
   type EntitySource,
   type EntityType,
   type EpisodeRow,
+  type EntityPropertyRow,
 } from "./graph-schema.js";
+import {
+  recordTextUnit as _recordTextUnit,
+  recordAssertion as _recordAssertion,
+  createSupersessionProposal as _createSupersessionProposal,
+  resolveSupersession as _resolveSupersession,
+  getAssertionsForEntity as _getAssertionsForEntity,
+  getPendingProposals as _getPendingProposals,
+  type TextUnitInput,
+  type AssertionInput,
+  type SupersessionProposalInput,
+} from "./graph-provenance.js";
+import {
+  setEntityProperty as _setEntityProperty,
+  getEntityProperties as _getEntityProperties,
+  getEffectiveProperties as _getEffectiveProperties,
+  deleteEntityProperty as _deleteEntityProperty,
+  type PropertyInput,
+} from "./graph-properties.js";
 import { vecUpsert, vecRemove } from "./graph-vec.js";
 import { clearSearchCache } from "./graph-search.js";
 import { GraphEventEmitter } from "./graph-events.js";
@@ -155,6 +174,23 @@ export class MemoryGraphEngine {
     this.namespace = opts?.namespace ?? null;
   }
 
+  /** Get the configured namespace. */
+  getNamespace(): string | null {
+    return this.namespace;
+  }
+
+  /**
+   * Build a namespace WHERE clause and params for a given column.
+   * - namespace != null: only see rows matching that namespace
+   * - namespace == null: only see rows with NULL namespace
+   */
+  private nsClause(col: string = "namespace"): { clause: string; params: (string | null)[] } {
+    if (this.namespace !== null) {
+      return { clause: `${col} = ?`, params: [this.namespace] };
+    }
+    return { clause: `${col} IS NULL`, params: [] };
+  }
+
   /** Expose the underlying database for advanced queries (e.g. episode lookups). */
   getDb(): DatabaseSync {
     return this.db;
@@ -220,8 +256,8 @@ export class MemoryGraphEngine {
       if (!embedding && this.embedFn) {
         // Only re-embed if content actually changed
         const existingHash = this.db
-          .prepare(`SELECT content_hash FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL AND (namespace = ? OR (namespace IS NULL AND ? IS NULL)) LIMIT 1`)
-          .get(input.name, input.type, this.namespace, this.namespace) as { content_hash: string | null } | undefined;
+          .prepare(`SELECT content_hash FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL AND ${this.nsClause().clause} LIMIT 1`)
+          .get(input.name, input.type, ...this.nsClause().params) as { content_hash: string | null } | undefined;
         const shouldReembed = !existingHash || existingHash.content_hash !== newHash;
         if (shouldReembed) {
           try {
@@ -238,11 +274,13 @@ export class MemoryGraphEngine {
       const embeddingBlob = embedding ? serializeEmbedding(embedding) : null;
 
       // Try to find existing active entity with same name+type (scoped by namespace)
+      const ns = this.nsClause();
+      const ens = this.nsClause("e.namespace");
       let existing = this.db
         .prepare(
-          `SELECT * FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL AND (namespace = ? OR (namespace IS NULL AND ? IS NULL)) LIMIT 1`,
+          `SELECT * FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL AND ${ns.clause} LIMIT 1`,
         )
-        .get(input.name, input.type, this.namespace, this.namespace) as EntityRow | undefined;
+        .get(input.name, input.type, ...ns.params) as EntityRow | undefined;
 
       // Fallback: try normalized alias lookup (join with entities to filter by type)
       if (!existing) {
@@ -251,9 +289,9 @@ export class MemoryGraphEngine {
           .prepare(
             `SELECT e.* FROM entity_aliases a ` +
               `JOIN entities e ON e.id = a.entity_id ` +
-              `WHERE a.alias = ? AND e.type = ? AND e.valid_until IS NULL AND (e.namespace = ? OR (e.namespace IS NULL AND ? IS NULL)) LIMIT 1`,
+              `WHERE a.alias = ? AND e.type = ? AND e.valid_until IS NULL AND ${ens.clause} LIMIT 1`,
           )
-          .get(normalized, input.type, this.namespace, this.namespace) as EntityRow | undefined;
+          .get(normalized, input.type, ...ens.params) as EntityRow | undefined;
       }
 
       if (existing) {
@@ -334,11 +372,12 @@ export class MemoryGraphEngine {
   async asyncUpsertEntity(input: EntityInput): Promise<Entity & { isNew: boolean }> {
     if (!input.embedding && this.asyncEmbedFn) {
       const newHash = computeContentHash(input.name, input.summary);
+      const ns = this.nsClause();
       const existingHash = this.db
         .prepare(
-          `SELECT content_hash FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL AND (namespace = ? OR (namespace IS NULL AND ? IS NULL)) LIMIT 1`,
+          `SELECT content_hash FROM entities WHERE name = ? AND type = ? AND valid_until IS NULL AND ${ns.clause} LIMIT 1`,
         )
-        .get(input.name, input.type, this.namespace, this.namespace) as
+        .get(input.name, input.type, ...ns.params) as
         | { content_hash: string | null }
         | undefined;
 
@@ -356,9 +395,10 @@ export class MemoryGraphEngine {
   }
 
   getEntity(id: string): Entity | null {
+    const ns = this.nsClause();
     const row = this.db
-      .prepare(`SELECT * FROM entities WHERE id = ? AND (namespace = ? OR (namespace IS NULL AND ? IS NULL))`)
-      .get(id, this.namespace, this.namespace) as EntityRow | undefined;
+      .prepare(`SELECT * FROM entities WHERE id = ? AND ${ns.clause}`)
+      .get(id, ...ns.params) as EntityRow | undefined;
     return row ? toEntity(row) : null;
   }
 
@@ -378,12 +418,9 @@ export class MemoryGraphEngine {
     if (activeOnly) {
       conditions.push(`valid_until IS NULL`);
     }
-    if (this.namespace !== null) {
-      conditions.push(`(namespace = ? OR namespace IS NULL)`);
-      params.push(this.namespace);
-    } else {
-      conditions.push(`namespace IS NULL`);
-    }
+    const ns = this.nsClause();
+    conditions.push(ns.clause);
+    params.push(...ns.params);
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const limit = query.limit ?? 100;
@@ -409,12 +446,9 @@ export class MemoryGraphEngine {
         if (activeOnly) {
           aliasConds.push(`valid_until IS NULL`);
         }
-        if (this.namespace !== null) {
-          aliasConds.push(`(namespace = ? OR namespace IS NULL)`);
-          aliasParams.push(this.namespace);
-        } else {
-          aliasConds.push(`namespace IS NULL`);
-        }
+        const aliasNs = this.nsClause();
+        aliasConds.push(aliasNs.clause);
+        aliasParams.push(...aliasNs.params);
         const aliasWhere = `WHERE ${aliasConds.join(" AND ")}`;
         const aliasEntities = this.db
           .prepare(`SELECT * FROM entities ${aliasWhere} ORDER BY updated_at DESC LIMIT ?`)
@@ -444,6 +478,14 @@ export class MemoryGraphEngine {
         `INSERT OR IGNORE INTO entity_aliases (alias, entity_id, created_at) VALUES (?, ?, ?)`,
       )
       .run(normalized, entityId, Date.now());
+  }
+
+  /** Get all aliases for an entity. */
+  getAliases(entityId: string): Set<string> {
+    const rows = this.db
+      .prepare(`SELECT alias FROM entity_aliases WHERE entity_id = ?`)
+      .all(entityId) as Array<{ alias: string }>;
+    return new Set(rows.map((r) => r.alias));
   }
 
   /** Mark an entity as no longer valid (soft delete with temporal tracking). */
@@ -505,26 +547,27 @@ export class MemoryGraphEngine {
   reassignEdges(fromEntityId: string, toEntityId: string): number {
     let count = 0;
     const now = Date.now();
+    const ns = this.nsClause();
     // Redirect outgoing edges
     const r1 = this.db
       .prepare(
-        `UPDATE edges SET from_id = ? WHERE from_id = ? AND valid_until IS NULL AND to_id != ?`,
+        `UPDATE edges SET from_id = ? WHERE from_id = ? AND valid_until IS NULL AND to_id != ? AND ${ns.clause}`,
       )
-      .run(toEntityId, fromEntityId, toEntityId);
+      .run(toEntityId, fromEntityId, toEntityId, ...ns.params);
     count += (r1 as { changes?: number }).changes ?? 0;
     // Redirect incoming edges
     const r2 = this.db
       .prepare(
-        `UPDATE edges SET to_id = ? WHERE to_id = ? AND valid_until IS NULL AND from_id != ?`,
+        `UPDATE edges SET to_id = ? WHERE to_id = ? AND valid_until IS NULL AND from_id != ? AND ${ns.clause}`,
       )
-      .run(toEntityId, fromEntityId, toEntityId);
+      .run(toEntityId, fromEntityId, toEntityId, ...ns.params);
     count += (r2 as { changes?: number }).changes ?? 0;
     // Invalidate self-loops that may have been created
     this.db
       .prepare(
-        `UPDATE edges SET valid_until = ? WHERE from_id = ? AND to_id = ? AND valid_until IS NULL`,
+        `UPDATE edges SET valid_until = ? WHERE from_id = ? AND to_id = ? AND valid_until IS NULL AND ${ns.clause}`,
       )
-      .run(now, toEntityId, toEntityId);
+      .run(now, toEntityId, toEntityId, ...ns.params);
     clearSearchCache(this.db);
     return count;
   }
@@ -542,16 +585,17 @@ export class MemoryGraphEngine {
     if (entities.length === 0) return [];
 
     // Batch edge counts in one query
+    const ns = this.nsClause();
     const edgeCounts = new Map<string, number>();
     const rows = this.db
       .prepare(
         `SELECT id, cnt FROM (` +
-          `SELECT from_id AS id, COUNT(*) AS cnt FROM edges WHERE valid_until IS NULL GROUP BY from_id ` +
+          `SELECT from_id AS id, COUNT(*) AS cnt FROM edges WHERE valid_until IS NULL AND ${ns.clause} GROUP BY from_id ` +
           `UNION ALL ` +
-          `SELECT to_id AS id, COUNT(*) AS cnt FROM edges WHERE valid_until IS NULL GROUP BY to_id` +
+          `SELECT to_id AS id, COUNT(*) AS cnt FROM edges WHERE valid_until IS NULL AND ${ns.clause} GROUP BY to_id` +
         `)`,
       )
-      .all() as Array<{ id: string; cnt: number }>;
+      .all(...ns.params, ...ns.params) as Array<{ id: string; cnt: number }>;
     for (const r of rows) {
       edgeCounts.set(r.id, (edgeCounts.get(r.id) ?? 0) + r.cnt);
     }
@@ -575,11 +619,12 @@ export class MemoryGraphEngine {
       const newWeight = input.weight ?? 1.0;
 
       // Dedup: check for existing active edge with same (from, to, relation) in same namespace
+      const ens = this.nsClause();
       const existing = this.db
         .prepare(
-          `SELECT * FROM edges WHERE from_id = ? AND to_id = ? AND relation = ? AND valid_until IS NULL AND (namespace = ? OR (namespace IS NULL AND ? IS NULL)) LIMIT 1`,
+          `SELECT * FROM edges WHERE from_id = ? AND to_id = ? AND relation = ? AND valid_until IS NULL AND ${ens.clause} LIMIT 1`,
         )
-        .get(input.fromId, input.toId, input.relation, this.namespace, this.namespace) as EdgeRow | undefined;
+        .get(input.fromId, input.toId, input.relation, ...ens.params) as EdgeRow | undefined;
 
       if (existing) {
         // Update weight (keep the higher value) and metadata
@@ -663,12 +708,9 @@ export class MemoryGraphEngine {
     if (activeOnly) {
       conditions.push(`valid_until IS NULL`);
     }
-    if (this.namespace !== null) {
-      conditions.push(`(namespace = ? OR namespace IS NULL)`);
-      params.push(this.namespace);
-    } else {
-      conditions.push(`namespace IS NULL`);
-    }
+    const ns = this.nsClause();
+    conditions.push(ns.clause);
+    params.push(...ns.params);
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const limit = query.limit ?? 100;
@@ -687,6 +729,7 @@ export class MemoryGraphEngine {
     const visitedEdges = new Set<string>();
     const resultEntities: Entity[] = [];
     const resultEdges: Edge[] = [];
+    const ns = this.nsClause();
 
     // Seed entity
     const root = this.getEntity(entityId);
@@ -702,9 +745,9 @@ export class MemoryGraphEngine {
         .prepare(
           `SELECT * FROM edges WHERE ` +
             `(from_id IN (${placeholders}) OR to_id IN (${placeholders})) ` +
-            `AND valid_until IS NULL`,
+            `AND valid_until IS NULL AND ${ns.clause}`,
         )
-        .all(...frontier, ...frontier) as EdgeRow[];
+        .all(...frontier, ...frontier, ...ns.params) as EdgeRow[];
 
       const newNeighborIds = new Set<string>();
       for (const row of edgeRows) {
@@ -726,8 +769,8 @@ export class MemoryGraphEngine {
         const ids = [...newNeighborIds];
         const ePlaceholders = ids.map(() => "?").join(",");
         const entityRows = this.db
-          .prepare(`SELECT * FROM entities WHERE id IN (${ePlaceholders})`)
-          .all(...ids) as EntityRow[];
+          .prepare(`SELECT * FROM entities WHERE id IN (${ePlaceholders}) AND ${ns.clause}`)
+          .all(...ids, ...ns.params) as EntityRow[];
         for (const row of entityRows) {
           resultEntities.push(toEntity(row));
         }
@@ -816,9 +859,10 @@ export class MemoryGraphEngine {
 
   /** Get all versions (active and invalidated) of an entity by name. */
   getEntityHistory(name: string): EntityVersion[] {
+    const ns = this.nsClause();
     const rows = this.db
-      .prepare(`SELECT * FROM entities WHERE name = ? ORDER BY valid_from DESC`)
-      .all(name) as EntityRow[];
+      .prepare(`SELECT * FROM entities WHERE name = ? AND ${ns.clause} ORDER BY valid_from DESC`)
+      .all(name, ...ns.params) as EntityRow[];
 
     return rows.map((row, i) => ({
       entity: toEntity(row),
@@ -851,19 +895,69 @@ export class MemoryGraphEngine {
   }
 
   getEpisodes(sessionKey: string, limit = 50): EpisodeRow[] {
+    const ns = this.nsClause();
     return this.db
-      .prepare(`SELECT * FROM episodes WHERE session_key = ? ORDER BY timestamp DESC LIMIT ?`)
-      .all(sessionKey, limit) as EpisodeRow[];
+      .prepare(`SELECT * FROM episodes WHERE session_key = ? AND ${ns.clause} ORDER BY timestamp DESC LIMIT ?`)
+      .all(sessionKey, ...ns.params, limit) as EpisodeRow[];
+  }
+
+  // -- Provenance (append-only) ---------------------------------------------
+
+  recordTextUnit(input: TextUnitInput) {
+    return _recordTextUnit(this.db, input, { namespace: this.namespace });
+  }
+
+  recordAssertion(input: AssertionInput) {
+    return _recordAssertion(this.db, input, { namespace: this.namespace });
+  }
+
+  createSupersessionProposal(input: SupersessionProposalInput) {
+    return _createSupersessionProposal(this.db, input, { namespace: this.namespace });
+  }
+
+  resolveSupersession(proposalId: string, decision: "approved" | "rejected") {
+    return _resolveSupersession(this.db, proposalId, decision, { namespace: this.namespace });
+  }
+
+  getAssertionsForEntity(entityId: string, opts?: { status?: string; limit?: number }) {
+    return _getAssertionsForEntity(this.db, entityId, { ...opts, namespace: this.namespace });
+  }
+
+  getPendingProposals(opts?: { targetEntityId?: string; limit?: number }) {
+    return _getPendingProposals(this.db, { ...opts, namespace: this.namespace });
+  }
+
+  // -- Properties (typed key-value) ------------------------------------------
+
+  setProperty(entityId: string, input: PropertyInput): EntityPropertyRow {
+    return _setEntityProperty(this.db, entityId, input, this.namespace);
+  }
+
+  getProperties(entityId: string, opts?: { key?: string }): EntityPropertyRow[] {
+    return _getEntityProperties(this.db, entityId, {
+      activeOnly: true,
+      key: opts?.key,
+      namespace: this.namespace,
+    });
+  }
+
+  getEffectiveProperties(entityId: string): Record<string, { value: string; type: string; confidence: number }> {
+    return _getEffectiveProperties(this.db, entityId, this.namespace);
+  }
+
+  deleteProperty(entityId: string, key: string): void {
+    _deleteEntityProperty(this.db, entityId, key, this.namespace);
   }
 
   // -- Stats ----------------------------------------------------------------
 
   stats(): { entities: number; edges: number; episodes: number; activeEntities: number } {
-    const entities = (this.db.prepare(`SELECT COUNT(*) as c FROM entities`).get() as { c: number }).c;
-    const edges = (this.db.prepare(`SELECT COUNT(*) as c FROM edges`).get() as { c: number }).c;
-    const episodes = (this.db.prepare(`SELECT COUNT(*) as c FROM episodes`).get() as { c: number }).c;
+    const ns = this.nsClause();
+    const entities = (this.db.prepare(`SELECT COUNT(*) as c FROM entities WHERE ${ns.clause}`).get(...ns.params) as { c: number }).c;
+    const edges = (this.db.prepare(`SELECT COUNT(*) as c FROM edges WHERE ${ns.clause}`).get(...ns.params) as { c: number }).c;
+    const episodes = (this.db.prepare(`SELECT COUNT(*) as c FROM episodes WHERE ${ns.clause}`).get(...ns.params) as { c: number }).c;
     const activeEntities = (
-      this.db.prepare(`SELECT COUNT(*) as c FROM entities WHERE valid_until IS NULL`).get() as { c: number }
+      this.db.prepare(`SELECT COUNT(*) as c FROM entities WHERE valid_until IS NULL AND ${ns.clause}`).get(...ns.params) as { c: number }
     ).c;
     return { entities, edges, episodes, activeEntities };
   }

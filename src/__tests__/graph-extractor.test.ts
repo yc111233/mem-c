@@ -58,7 +58,7 @@ describe("graph-extractor", () => {
               relation: "has_feature",
             },
           ],
-          invalidations: [],
+          contradictions: [],
         }),
       );
 
@@ -72,6 +72,8 @@ describe("graph-extractor", () => {
       expect(result.entitiesCreated).toBe(2);
       expect(result.edgesCreated).toBe(1);
       expect(result.episodeRecorded).toBe(true);
+      expect(result.assertionsRecorded).toBe(2);
+      expect(result.supersessionProposals).toBe(0);
       expect(result.errors).toHaveLength(0);
 
       // Verify entities in DB
@@ -79,8 +81,8 @@ describe("graph-extractor", () => {
       expect(entities).toHaveLength(2);
     });
 
-    it("handles invalidations", async () => {
-      // Pre-create an entity that will be invalidated
+    it("creates supersession proposals for contradictions instead of direct invalidation", async () => {
+      // Pre-create an entity that will be contradicted
       engine.upsertEntity({ name: "Old API", type: "concept", summary: "v1" });
 
       const mockLlm: LlmExtractFn = vi.fn().mockResolvedValue(
@@ -89,8 +91,13 @@ describe("graph-extractor", () => {
             { name: "New API", type: "concept", summary: "v2 replacement", confidence: 1.0 },
           ],
           relations: [],
-          invalidations: [
-            { name: "Old API", type: "concept", reason: "replaced by New API" },
+          contradictions: [
+            {
+              existingEntityName: "Old API",
+              existingEntityType: "concept",
+              newInfo: "Old API has been replaced by New API v2",
+              reason: "replaced by New API",
+            },
           ],
         }),
       );
@@ -102,12 +109,17 @@ describe("graph-extractor", () => {
         llmExtract: mockLlm,
       });
 
-      expect(result.invalidated).toBe(1);
+      expect(result.supersessionProposals).toBe(1);
       expect(result.entitiesCreated).toBe(1);
 
-      // Old API should be invalidated
+      // Old API should still be active (not directly invalidated)
       const active = engine.findEntities({ name: "Old API", activeOnly: true });
-      expect(active).toHaveLength(0);
+      expect(active).toHaveLength(1);
+
+      // A pending supersession proposal should exist
+      const proposals = engine.getPendingProposals({ targetEntityId: active[0]!.id });
+      expect(proposals).toHaveLength(1);
+      expect(proposals[0]!.new_assertion_text).toContain("New API");
     });
 
     it("skips short transcripts", async () => {
@@ -140,7 +152,7 @@ describe("graph-extractor", () => {
 
     it("handles markdown-wrapped JSON from LLM", async () => {
       const mockLlm: LlmExtractFn = vi.fn().mockResolvedValue(
-        '```json\n{"entities": [{"name": "Test", "type": "concept", "summary": "A test entity", "confidence": 1.0}], "relations": [], "invalidations": []}\n```',
+        '```json\n{"entities": [{"name": "Test", "type": "concept", "summary": "A test entity", "confidence": 1.0}], "relations": [], "contradictions": []}\n```',
       );
 
       const result = await extractAndMerge({
@@ -163,7 +175,7 @@ describe("graph-extractor", () => {
             { name: "React", type: "concept", summary: "updated summary", confidence: 1.0 },
           ],
           relations: [],
-          invalidations: [],
+          contradictions: [],
         }),
       );
 

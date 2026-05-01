@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MemoryGraphEngine } from "../host/graph-engine.js";
@@ -12,6 +13,24 @@ function createTestDb(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   ensureGraphSchema({ db, ftsEnabled: true });
   return db;
+}
+
+/**
+ * Insert an entity directly via SQL, bypassing the engine's alias-based dedup.
+ * This simulates entities imported from external sources that the consolidation
+ * linker is designed to catch.
+ */
+function insertRawEntity(
+  db: DatabaseSync,
+  opts: { name: string; type: string; confidence?: number },
+): string {
+  const id = randomUUID();
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO entities (id, name, type, confidence, source, valid_from, valid_until, created_at, updated_at, access_count, last_accessed_at) ` +
+      `VALUES (?, ?, ?, ?, 'imported', ?, NULL, ?, ?, 0, 0)`,
+  ).run(id, opts.name, opts.type, opts.confidence ?? 1.0, now, now, now);
+  return id;
 }
 
 // ---------------------------------------------------------------------------
@@ -31,10 +50,12 @@ describe("consolidateGraph", () => {
     db.close();
   });
 
-  describe("merge phase", () => {
-    it("merges same-name entities with different types", () => {
-      engine.upsertEntity({ name: "React", type: "concept", summary: "UI lib", confidence: 0.9 });
-      engine.upsertEntity({ name: "React", type: "tool", summary: "Build tool", confidence: 0.5 });
+  describe("linking phase", () => {
+    it("merges same-name same-type duplicates (same_as)", () => {
+      // Create via engine (registers aliases)
+      const r1 = engine.upsertEntity({ name: "React", type: "concept", summary: "UI lib", confidence: 0.9 });
+      // Insert a raw duplicate (bypasses engine dedup — simulates imported entity)
+      const r2Id = insertRawEntity(db, { name: "React", type: "concept", confidence: 0.5 });
 
       const result = consolidateGraph(engine);
       expect(result.merged).toBe(1);
@@ -42,22 +63,46 @@ describe("consolidateGraph", () => {
 
       // Only one active React should remain
       const active = engine.getActiveEntities();
-      const reacts = active.filter((e) => e.name === "React");
+      const reacts = active.filter((e) => e.name === "React" || e.name === "react");
       expect(reacts).toHaveLength(1);
       expect(reacts[0]!.confidence).toBe(0.9); // keeper has higher confidence
     });
 
+    it("does NOT merge same-name different-type entities", () => {
+      engine.upsertEntity({ name: "React", type: "concept", summary: "UI lib", confidence: 0.9 });
+      engine.upsertEntity({ name: "React", type: "tool", summary: "Build tool", confidence: 0.5 });
+
+      const result = consolidateGraph(engine);
+      expect(result.merged).toBe(0);
+
+      // Both should still be active
+      const active = engine.getActiveEntities();
+      const reacts = active.filter((e) => e.name === "React");
+      expect(reacts).toHaveLength(2);
+    });
+
     it("reassigns edges when merging", () => {
       const r1 = engine.upsertEntity({ name: "React", type: "concept", confidence: 0.9 });
-      const r2 = engine.upsertEntity({ name: "React", type: "tool", confidence: 0.5 });
+      const r2Id = insertRawEntity(db, { name: "React", type: "concept", confidence: 0.5 });
       const ts = engine.upsertEntity({ name: "TypeScript", type: "concept" });
-      engine.addEdge({ fromId: r2.id, toId: ts.id, relation: "uses" });
+      engine.addEdge({ fromId: r2Id, toId: ts.id, relation: "uses" });
 
       consolidateGraph(engine);
 
       // Edge should now point from r1 (keeper) to ts
       const edges = engine.findEdges({ entityId: r1.id, activeOnly: true });
       expect(edges.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("creates alias for loser entity name", () => {
+      const r1 = engine.upsertEntity({ name: "React", type: "concept", confidence: 0.9 });
+      const r2Id = insertRawEntity(db, { name: "react", type: "concept", confidence: 0.5 });
+
+      consolidateGraph(engine);
+
+      // Keeper should have the loser's normalized name as an alias
+      const aliases = engine.getAliases(r1.id);
+      expect(aliases.has("react")).toBe(true);
     });
 
     it("does not merge when only one entity per name", () => {
@@ -126,14 +171,14 @@ describe("consolidateGraph", () => {
   describe("dry run", () => {
     it("reports changes without modifying", () => {
       engine.upsertEntity({ name: "React", type: "concept", confidence: 0.9 });
-      engine.upsertEntity({ name: "React", type: "tool", confidence: 0.5 });
+      insertRawEntity(db, { name: "React", type: "concept", confidence: 0.5 });
       engine.upsertEntity({ name: "Orphan", type: "concept", confidence: 0.1 });
 
       const result = consolidateGraph(engine, { dryRun: true, pruneThreshold: 0.3 });
       expect(result.merged).toBe(1);
       expect(result.pruned).toBe(1);
 
-      // Nothing actually changed
+      // Nothing actually changed — both React entities still active
       const active = engine.getActiveEntities();
       expect(active.filter((e) => e.name === "React")).toHaveLength(2);
       expect(active.filter((e) => e.name === "Orphan")).toHaveLength(1);
@@ -142,9 +187,9 @@ describe("consolidateGraph", () => {
 
   describe("full pipeline", () => {
     it("runs all phases together", () => {
-      // Merge target
+      // Merge target (same type — linked as same_as via raw insert)
       engine.upsertEntity({ name: "React", type: "concept", confidence: 0.9 });
-      engine.upsertEntity({ name: "React", type: "tool", confidence: 0.5 });
+      insertRawEntity(db, { name: "React", type: "concept", confidence: 0.5 });
 
       // Decay target
       const old = engine.upsertEntity({ name: "Legacy", type: "concept", confidence: 0.8 });

@@ -182,8 +182,9 @@ export async function searchGraph(
   const candidateLimit = maxResults * 4;
 
   // Path 1: FTS search
+  const namespace = engine.getNamespace();
   try {
-    const ftsResults = searchEntityFts(db, query, { limit: candidateLimit });
+    const ftsResults = searchEntityFts(db, query, { limit: candidateLimit, namespace });
     if (ftsResults.length > 0) {
       // FTS5 BM25 rank is negative; more negative = better match.
       // Normalize: score = -rank / (-rank + 1) maps (-inf,0) → (0,1)
@@ -223,17 +224,21 @@ export async function searchGraph(
     const escaped = query.replace(/[%_\\]/g, (ch) => `\\${ch}`);
     const likePattern = `%${escaped}%`;
     const validClause = activeOnly ? `AND valid_until IS NULL` : "";
+    const nsClause = namespace !== null
+      ? `AND namespace = ?`
+      : `AND namespace IS NULL`;
+    const nsParams = namespace !== null ? [namespace] : [];
 
     const nameHits = db
-      .prepare(`SELECT id FROM entities WHERE name LIKE ? ESCAPE '\\' ${validClause} LIMIT ?`)
-      .all(likePattern, candidateLimit) as Array<{ id: string }>;
+      .prepare(`SELECT id FROM entities WHERE name LIKE ? ESCAPE '\\' ${nsClause} ${validClause} LIMIT ?`)
+      .all(likePattern, ...nsParams, candidateLimit) as Array<{ id: string }>;
     for (const row of nameHits) {
       candidateScores.set(row.id, { vector: 0, fts: 0.5 });
     }
 
     const summaryHits = db
-      .prepare(`SELECT id FROM entities WHERE summary LIKE ? ESCAPE '\\' ${validClause} LIMIT ?`)
-      .all(likePattern, candidateLimit) as Array<{ id: string }>;
+      .prepare(`SELECT id FROM entities WHERE summary LIKE ? ESCAPE '\\' ${nsClause} ${validClause} LIMIT ?`)
+      .all(likePattern, ...nsParams, candidateLimit) as Array<{ id: string }>;
     for (const row of summaryHits) {
       if (!candidateScores.has(row.id)) {
         candidateScores.set(row.id, { vector: 0, fts: 0.2 });
@@ -362,22 +367,27 @@ function vectorSearchEntities(
   limit: number,
   activeOnly: boolean,
 ): VectorHit[] {
+  const namespace = engine.getNamespace();
+
   // Path 1: sqlite-vec ANN index (fast path)
+  // vec0 doesn't support metadata, so filter by namespace after KNN
   if (engine.vecAvailable()) {
     try {
-      const knnResults = vecKnn(db, queryEmbedding, limit * 2, true);
+      const knnResults = vecKnn(db, queryEmbedding, limit * 4, true);
       if (knnResults.length > 0) {
         const hits: VectorHit[] = [];
         for (const r of knnResults) {
-          if (activeOnly) {
-            const entity = engine.getEntity(r.id);
-            if (!entity || entity.valid_until !== null) continue;
-          }
+          const entity = engine.getEntity(r.id);
+          if (!entity) continue;
+          if (activeOnly && entity.valid_until !== null) continue;
+          if (namespace !== null && entity.namespace !== namespace) continue;
+          if (namespace === null && entity.namespace !== null) continue;
           const similarity = 1 / (1 + r.distance);
           hits.push({ id: r.id, similarity });
+          if (hits.length >= limit) break;
         }
         hits.sort((a, b) => b.similarity - a.similarity);
-        return hits.slice(0, limit);
+        return hits;
       }
     } catch {
       // Fall through to full scan
@@ -387,13 +397,18 @@ function vectorSearchEntities(
   // Path 2: Full scan fallback (original implementation)
   try {
     const scanLimit = Math.min(VECTOR_SCAN_LIMIT, Math.max(limit * 2, 100));
+    const nsClause = namespace !== null
+      ? `AND namespace = ?`
+      : `AND namespace IS NULL`;
+    const nsParams = namespace !== null ? [namespace] : [];
     const rows = db
       .prepare(
         `SELECT id, embedding FROM entities WHERE embedding IS NOT NULL ` +
+          `${nsClause} ` +
           `${activeOnly ? "AND valid_until IS NULL " : ""}` +
           `ORDER BY updated_at DESC LIMIT ?`,
       )
-      .all(scanLimit) as Array<{ id: string; embedding: string | Buffer }>;
+      .all(...nsParams, scanLimit) as Array<{ id: string; embedding: string | Buffer }>;
 
     const hits: VectorHit[] = [];
     for (const row of rows) {

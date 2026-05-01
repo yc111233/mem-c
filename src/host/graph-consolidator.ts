@@ -5,7 +5,12 @@
  * All mutations run inside a single transaction.
  */
 
-import { normalizeEntityName, type MemoryGraphEngine, type Entity } from "./graph-engine.js";
+import { type MemoryGraphEngine, type Entity } from "./graph-engine.js";
+import {
+  linkEntities,
+  findLinkCandidates,
+  type LinkerOpts,
+} from "./graph-linking.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -13,6 +18,7 @@ import { normalizeEntityName, type MemoryGraphEngine, type Entity } from "./grap
 
 export type ConsolidationResult = {
   merged: number;
+  linked: number;
   decayed: number;
   pruned: number;
   errors: string[];
@@ -23,8 +29,10 @@ export type ConsolidationOpts = {
   decayAfterDays?: number;
   /** Orphan entities below this confidence threshold get pruned. Default 0.3. */
   pruneThreshold?: number;
-  /** Enable same-name entity merge. Default true. */
+  /** Enable entity linking (replaces old same-name merge). Default true. */
   enableMerge?: boolean;
+  /** Linker thresholds. */
+  linkerOpts?: LinkerOpts;
   /** Dry run — report what would happen without modifying. Default false. */
   dryRun?: boolean;
 };
@@ -44,43 +52,45 @@ export function consolidateGraph(
   const now = Date.now();
   const decayCutoff = now - decayAfterDays * 86_400_000;
 
-  const result: ConsolidationResult = { merged: 0, decayed: 0, pruned: 0, errors: [] };
+  const result: ConsolidationResult = { merged: 0, linked: 0, decayed: 0, pruned: 0, errors: [] };
 
   const run = () => {
     // Phase 1: Scan
     const entities = engine.getActiveEntities();
 
-    // Phase 2: Merge — same-name entities (normalized) with different types
+    // Phase 2: Entity linking — score-based replacement for brute-force merge
     if (enableMerge) {
-      const byName = new Map<string, Entity[]>();
-      for (const e of entities) {
-        const key = normalizeEntityName(e.name);
-        const group = byName.get(key) ?? [];
-        group.push(e);
-        byName.set(key, group);
-      }
+      const candidates = findLinkCandidates(engine);
+      for (const candidate of candidates) {
+        try {
+          const linkResult = linkEntities(engine, candidate, opts?.linkerOpts);
 
-      for (const [, group] of byName) {
-        if (group.length < 2) continue;
-        // Keep the entity with highest confidence (tie-break: most recent updated_at)
-        group.sort((a, b) => b.confidence - a.confidence || b.updated_at - a.updated_at);
-        const keeper = group[0]!;
-        for (let i = 1; i < group.length; i++) {
-          const dup = group[i]!;
-          try {
+          if (linkResult.decision === "same_as") {
+            // Merge: keep the entity with higher confidence
+            const { entityA, entityB } = candidate;
+            const [keeper, loser] =
+              entityA.confidence >= entityB.confidence
+                ? [entityA, entityB]
+                : [entityB, entityA];
+
             if (!dryRun) {
-              // ORDER MATTERS: reassign edges BEFORE invalidate.
-              // invalidateEntity sets valid_until on all edges touching dup.id.
-              // If we invalidate first, the edges are gone before we can redirect them.
-              engine.reassignEdges(dup.id, keeper.id);
-              engine.invalidateEntity(dup.id, `merged into ${keeper.id} (${keeper.type})`);
+              engine.reassignEdges(loser.id, keeper.id);
+              engine.addAlias(keeper.id, loser.name);
+              engine.invalidateEntity(
+                loser.id,
+                `linked as same_as -> ${keeper.id} (score: ${linkResult.score.toFixed(2)}, evidence: ${linkResult.evidence.join("; ")})`,
+              );
             }
             result.merged++;
-          } catch (err) {
-            result.errors.push(
-              `merge ${dup.name}(${dup.type}): ${err instanceof Error ? err.message : String(err)}`,
-            );
+          } else if (linkResult.decision === "possibly_same_as") {
+            // Log but don't merge
+            result.linked++;
           }
+          // "alias_of" and "distinct" — skip silently
+        } catch (err) {
+          result.errors.push(
+            `link ${candidate.entityA.name} <-> ${candidate.entityB.name}: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
       }
     }

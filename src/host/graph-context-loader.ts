@@ -125,15 +125,22 @@ export function buildL0Context(
   const maxEntities = opts?.maxEntities ?? 50;
   const maxTokens = opts?.maxTokens ?? 200;
 
+  // Pinned core memory always comes first
+  const pinned = buildPinnedMemory(engine, { maxTokens: Math.floor(maxTokens * 0.4) });
+  const pinnedNames = new Set(pinned.entities.map((e) => e.name));
+
   // When useImportance is true, sort by composite importance score
   let sorted: Entity[];
   if (opts?.useImportance) {
     sorted = engine
       .getEntitiesByImportance({ maxEntities })
-      .map(({ importance, ...entity }) => entity);
+      .map(({ importance, ...entity }) => entity)
+      .filter((e) => !pinnedNames.has(e.name));
   } else {
     const entities = engine.getActiveEntities();
-    sorted = [...entities].sort((a, b) => b.updated_at - a.updated_at);
+    sorted = [...entities]
+      .filter((e) => !pinnedNames.has(e.name))
+      .sort((a, b) => b.updated_at - a.updated_at);
   }
 
   const entries: string[] = [];
@@ -141,6 +148,17 @@ export function buildL0Context(
   const headerTokens = estimateTokens("Known entities:\n");
   totalTokens += headerTokens;
 
+  // Pinned entities first (with marker)
+  for (const e of pinned.entities) {
+    if (entries.length >= maxEntities) break;
+    const line = `- **${e.name}** (${e.type}) [pinned]`;
+    const lineTokens = estimateTokens(line + "\n");
+    if (totalTokens + lineTokens > maxTokens) break;
+    entries.push(line);
+    totalTokens += lineTokens;
+  }
+
+  // Then the rest
   for (const entity of sorted) {
     if (entries.length >= maxEntities) break;
     const line = `- ${entity.name} (${entity.type})`;
@@ -160,6 +178,54 @@ export function buildL0Context(
 export function formatL0AsPromptSection(l0: L0Context): string {
   if (l0.entries.length === 0) return "";
   return `## Known Entities\n${l0.entries.join("\n")}`;
+}
+
+// ---------------------------------------------------------------------------
+// Pinned core memory (identity / preference / feedback entities)
+// ---------------------------------------------------------------------------
+
+export type PinnedMemory = {
+  entities: Array<{ name: string; type: string; summary: string }>;
+  estimatedTokens: number;
+};
+
+/**
+ * Build a pinned core memory block from high-confidence identity/preference
+ * entities. These are always injected into L0 so the model has stable context
+ * about who the user is and what they care about.
+ */
+export function buildPinnedMemory(
+  engine: MemoryGraphEngine,
+  opts?: { maxTokens?: number },
+): PinnedMemory {
+  const maxTokens = opts?.maxTokens ?? 200;
+  const pinnedTypes = ["user", "preference", "feedback", "decision"];
+  const entities = engine.getActiveEntities();
+  const pinned = entities
+    .filter((e) => pinnedTypes.includes(e.type) && e.confidence >= 0.8)
+    .sort((a, b) => b.access_count - a.access_count)
+    .slice(0, 10);
+
+  let totalTokens = 0;
+  const result: PinnedMemory["entities"] = [];
+  for (const e of pinned) {
+    const line = `${e.name}: ${e.summary ?? e.type}`;
+    const tokens = Math.ceil(line.length / 4);
+    if (totalTokens + tokens > maxTokens) break;
+    result.push({ name: e.name, type: e.type, summary: e.summary ?? "" });
+    totalTokens += tokens;
+  }
+
+  return { entities: result, estimatedTokens: totalTokens };
+}
+
+/**
+ * Format pinned memory as a prompt section. Returns empty string if nothing to pin.
+ */
+export function formatPinnedMemory(pinned: PinnedMemory): string {
+  if (pinned.entities.length === 0) return "";
+  const lines = pinned.entities.map((e) => `- ${e.name} (${e.type}): ${e.summary}`);
+  return `## Core Memory\n${lines.join("\n")}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,11 @@ export type GraphEvents = {
   "edge:updated": [edge: Edge];
   "edge:invalidated": [edgeId: string];
   "communities:detected": [communityCount: number];
+  // S8 observability events
+  "search:executed": [mode: string, resultCount: number, cached: boolean];
+  "context:packed": [tokens: number, budget: number];
+  "proposal:created": [proposalId: string, targetEntityId: string];
+  "proposal:resolved": [proposalId: string, decision: "approved" | "rejected"];
 };
 
 export class GraphEventEmitter extends EventEmitter {
