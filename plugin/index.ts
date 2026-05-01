@@ -556,7 +556,7 @@ export default {
 
         const l0 =
           queryText.length >= 5
-            ? buildQueryAwareL0Context(db, engine, queryText, {
+            ? await buildQueryAwareL0Context(db, engine, queryText, {
                 maxEntities: cfg.recallMaxEntities,
                 maxTokens: effectiveL0Budget,
                 useImportance: true,
