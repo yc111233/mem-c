@@ -1,5 +1,6 @@
 {
   "id": "mem-c",
+  "kind": "memory",
   "uiHints": {
     "dbPath": {
       "label": "Database Path",
@@ -49,7 +50,26 @@
       "recallMaxTokens": { "type": "number" },
       "recallMaxEntities": { "type": "number" },
       "searchMaxResults": { "type": "number" },
-      "recallAvailableBudget": { "type": "number" }
+      "recallAvailableBudget": { "type": "number" },
+      "dreaming": {
+        "type": "object",
+        "description": "Passthrough config for memory-core dreaming sidecar. mem-c ignores this field; OpenClaw loader reads it to decide whether to load memory-core as a sidecar.",
+        "additionalProperties": true
+      }
     }
+  },
+  "contracts": {
+    "tools": [
+      "memory_graph_search",
+      "memory_graph_store",
+      "memory_batch_store",
+      "memory_detail",
+      "memory_graph",
+      "memory_invalidate",
+      "memory_consolidate",
+      "memory_detect_communities",
+      "memory_find_paths",
+      "memory_export_graph"
+    ]
   }
 }
